@@ -199,6 +199,12 @@ class Session:
                     if isinstance(feed, LiveFeed) and feed.tick_size:
                         self.state.tick_size = feed.tick_size
                     self.send({"type": "book", **self.state.book_snapshot()})
+                elif et == "metrics":
+                    self.state.deriv.on_oi(ev["ts"], ev["oi"], ev.get("taker", 0.0))
+                    self.send_deriv()
+                elif et == "funding":
+                    self.state.deriv.on_funding(ev["ts"], ev["rate"])
+                    self.send_deriv()
                 elif et == "warmup":
                     for c in ev["candles"]:
                         self.state.candles.append(c)
@@ -327,6 +333,11 @@ class Session:
 
     def notify(self, level: str, text: str):
         self.send({"type": "notification", "level": level, "text": text})
+
+    def send_deriv(self):
+        d = self.state.deriv
+        self.send({"type": "deriv", "funding": d.funding_rate,
+                   "oi": d.oi_now(), "oiChg1h": d.oi_chg(60, self.state.last_ts)})
 
     def send_bt_status(self):
         self.send({"type": "bt_status", **self.bt_status})

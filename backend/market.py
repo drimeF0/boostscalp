@@ -46,6 +46,57 @@ class CandleBuilder:
         return closed
 
 
+class DerivativesState:
+    """Фьючерсные данные: фандинг и история открытого интереса."""
+
+    OI_MAXLEN = 2000  # ~7 дней 5-минутных точек
+
+    def __init__(self):
+        self.funding_rate: float = 0.0
+        self.funding_ts: int = 0
+        self.oi: Deque = deque(maxlen=self.OI_MAXLEN)  # (ts_ms, oi)
+        self.taker_ls_ratio: float = 0.0  # taker buy/sell vol ratio (из metrics)
+
+    def reset(self):
+        self.funding_rate = 0.0
+        self.funding_ts = 0
+        self.oi.clear()
+        self.taker_ls_ratio = 0.0
+
+    def on_funding(self, ts_ms: int, rate: float):
+        self.funding_rate = rate
+        self.funding_ts = ts_ms
+
+    def on_oi(self, ts_ms: int, oi: float, taker_ratio: float = 0.0):
+        if self.oi and ts_ms < self.oi[-1][0]:
+            return
+        self.oi.append((ts_ms, oi))
+        if taker_ratio:
+            self.taker_ls_ratio = taker_ratio
+
+    def oi_now(self) -> float:
+        return self.oi[-1][1] if self.oi else 0.0
+
+    def oi_chg(self, minutes: int, ref_ts: int) -> float:
+        """Относительное изменение OI за последние `minutes` минут."""
+        if len(self.oi) < 2 or ref_ts <= 0:
+            return 0.0
+        target = ref_ts - minutes * 60_000
+        past = None
+        for ts, v in self.oi:
+            if ts <= target:
+                past = v
+            else:
+                break
+        if past is None or past <= 0:
+            # данных раньше target нет — берём самую старую точку
+            past = self.oi[0][1]
+            if past <= 0 or ref_ts - self.oi[0][0] < minutes * 30_000:
+                return 0.0
+        now = self.oi[-1][1]
+        return (now - past) / past
+
+
 class MarketState:
     """Хранит последние цены, свечи, стакан; считает индикаторы."""
 
@@ -58,6 +109,7 @@ class MarketState:
         self.builder = CandleBuilder(on_candle_close=self._on_candle)
         self.bids: List[List[float]] = []
         self.asks: List[List[float]] = []
+        self.deriv = DerivativesState()
         # сессионный VWAP
         self._vwap_day: Optional[int] = None
         self._pv: float = 0.0
@@ -78,6 +130,7 @@ class MarketState:
         self.builder = CandleBuilder(on_candle_close=self._on_candle)
         self.bids = []
         self.asks = []
+        self.deriv.reset()
         self._vwap_day = None
         self._pv = 0.0
         self._vv = 0.0

@@ -17,8 +17,8 @@ DEFAULT_START_BALANCE = 10_000.0   # USDT
 DEFAULT_TAKER_FEE = 0.001          # 0.1%
 DEFAULT_MAKER_FEE = 0.0002         # 0.02%
 
-# --- Бэктест ---
-BINANCE_DATA_BASE = "https://data.binance.vision/data/spot"
+# --- Бэктест (USDT-M фьючерсы Binance) ---
+BINANCE_DATA_BASE = "https://data.binance.vision/data/futures/um"
 BACKTEST_INTERVAL = "1m"           # свечи для реплея
 WARMUP_CANDLES = 300               # сколько свечей до старта грузим для индикаторов
 SYNTH_TICKS_PER_CANDLE = 8         # синтетических тиков внутри 1m свечи

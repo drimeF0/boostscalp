@@ -58,7 +58,18 @@ function routeMessage(m) {
     case "meta_verdict": onVerdict(m); break;
     case "notification": toast(m.level, m.text); break;
     case "bt_status":    App.bt = m; renderBtStatus(); break;
+    case "deriv":        renderDeriv(m); break;
   }
+}
+
+function renderDeriv(m) {
+  const f = document.getElementById("deriv-funding");
+  f.textContent = (m.funding * 100).toFixed(4) + "%";
+  f.className = m.funding >= 0 ? "pos" : "neg";
+  const o = document.getElementById("deriv-oi");
+  const chg = (m.oiChg1h || 0) * 100;
+  o.textContent = (chg >= 0 ? "+" : "") + chg.toFixed(2) + "%";
+  o.className = chg >= 0 ? "pos" : "neg";
 }
 
 /* ---------------- обработчики ---------------- */
