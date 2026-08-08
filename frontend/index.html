@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trading Trainer</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ ПАНЕЛЬ ИНСТРУМЕНТОВ ============ -->
+<div id="toolbar">
+  <div class="tb-row">
+    <span class="logo">⚡ TradingTrainer</span>
+
+    <div class="tb-group">
+      <button id="mode-live" class="mode-btn active">Live</button>
+      <button id="mode-bt" class="mode-btn">Бэктест</button>
+    </div>
+
+    <!-- Live контролы -->
+    <div class="tb-group" id="live-controls">
+      <select id="live-exchange">
+        <option value="binance">Binance</option>
+        <option value="bybit">Bybit</option>
+        <option value="okx">OKX</option>
+        <option value="kucoin">KuCoin</option>
+      </select>
+      <input id="live-symbol" value="BTC/USDT" spellcheck="false">
+      <button id="live-connect" class="btn btn-go">Подключить</button>
+    </div>
+
+    <!-- Backtest контролы -->
+    <div class="tb-group hidden" id="bt-controls">
+      <input id="bt-symbol" value="BTC/USDT" spellcheck="false" class="w90">
+      <input id="bt-start" type="date" value="2024-01-01">
+      <input id="bt-end" type="date" value="2024-01-02">
+      <select id="bt-datatype">
+        <option value="klines">Свечи 1m</option>
+        <option value="aggTrades">Тики (aggTrades)</option>
+      </select>
+      <label>×<input id="bt-speed" type="number" value="5" min="1" max="200" class="w55"></label>
+      <button id="bt-start-btn" class="btn btn-go">▶ Старт</button>
+      <button id="bt-pause-btn" class="btn hidden">⏸</button>
+      <button id="bt-stop-btn" class="btn hidden">⏹</button>
+    </div>
+
+    <div class="tb-group" id="bt-progress-wrap" class="hidden">
+      <div id="bt-progress"><div id="bt-progress-bar"></div></div>
+      <span id="bt-time"></span>
+    </div>
+
+    <div class="tb-spacer"></div>
+
+    <div class="tb-group account-info">
+      <span>Баланс <b id="acc-balance">—</b></span>
+      <span>Equity <b id="acc-equity">—</b></span>
+      <span>PnL <b id="acc-pnl">—</b></span>
+      <span id="pos-badge" class="hidden"></span>
+    </div>
+  </div>
+
+  <div class="tb-row tb-row2">
+    <div class="tb-group">
+      <span class="lbl">Объём:</span>
+      <b id="cur-size" class="size-badge">$100</b>
+      <span class="hint" id="size-hint">клавиши 1–9</span>
+    </div>
+    <div class="tb-group">
+      <span class="lbl">Мета-модель:</span>
+      <label class="switch"><input type="checkbox" id="meta-enabled"><span class="sl"></span></label>
+      <select id="meta-mode">
+        <option value="filter">Фильтр (до сделки)</option>
+        <option value="advisory">Советник (после сделки)</option>
+      </select>
+      <label>порог <input id="meta-threshold" type="number" value="0.50" step="0.05" min="0.1" max="0.9" class="w55"></label>
+      <span id="meta-status" class="model-off">не обучена</span>
+    </div>
+    <div class="tb-spacer"></div>
+    <div class="tb-group hint">
+      B — купить · S — продать · X — закрыть позицию · C — отменить ордера · T (удерживать) + ПКМ — стоп/тейк, + ЛКМ — отмена
+    </div>
+  </div>
+</div>
+
+<!-- ============ ОСНОВНАЯ ОБЛАСТЬ ============ -->
+<div id="main">
+  <div id="chart-wrap"><div id="chart"></div></div>
+
+  <div id="dom-panel">
+    <div id="dom-header">
+      <span>Стакан</span>
+      <label>Сжатие
+        <select id="dom-agg">
+          <option value="1">×1</option>
+          <option value="2">×2</option>
+          <option value="5">×5</option>
+          <option value="10">×10</option>
+          <option value="25">×25</option>
+          <option value="50">×50</option>
+          <option value="100">×100</option>
+        </select>
+      </label>
+    </div>
+    <div id="dom-cols"><span>Цена</span><span>Объём</span></div>
+    <div id="dom-body">
+      <div id="dom-asks"></div>
+      <div id="dom-spread">—</div>
+      <div id="dom-bids"></div>
+    </div>
+    <div id="dom-hint">ЛКМ бид — лимит buy · ЛКМ аск — market buy<br>ПКМ аск — лимит sell · ПКМ бид — market sell</div>
+  </div>
+</div>
+
+<!-- ============ НИЖНИЕ ВКЛАДКИ ============ -->
+<div id="bottom">
+  <div id="tabs">
+    <button class="tab active" data-tab="position">Позиция</button>
+    <button class="tab" data-tab="orders">Ордера <span id="orders-count" class="cnt hidden"></span></button>
+    <button class="tab" data-tab="trades">Сделки <span id="trades-count" class="cnt hidden"></span></button>
+    <button class="tab" data-tab="model">Модель</button>
+    <button class="tab" data-tab="settings">Настройки</button>
+  </div>
+
+  <div class="tab-panel" id="tab-position">
+    <table class="tbl" id="position-table">
+      <thead><tr><th>Символ</th><th>Сторона</th><th>Кол-во</th><th>Вход</th><th>Текущая</th><th>uPnL</th><th>Стоп</th><th>Тейк</th><th></th></tr></thead>
+      <tbody><tr><td colspan="9" class="empty">Нет открытой позиции</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="tab-panel hidden" id="tab-orders">
+    <table class="tbl" id="orders-table">
+      <thead><tr><th>ID</th><th>Сторона</th><th>Тип</th><th>Цена</th><th>Кол-во</th><th>Сумма</th><th></th></tr></thead>
+      <tbody><tr><td colspan="7" class="empty">Нет открытых ордеров</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="tab-panel hidden" id="tab-trades">
+    <table class="tbl" id="trades-table">
+      <thead><tr><th>#</th><th>Символ</th><th>Сторона</th><th>Вход</th><th>Выход</th><th>PnL</th><th>Метка</th><th>Время</th></tr></thead>
+      <tbody><tr><td colspan="8" class="empty">Сделок пока нет</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="tab-panel hidden" id="tab-model">
+    <div class="model-grid">
+      <div>
+        <h4>Мета-лейблинг (CatBoost)</h4>
+        <p class="dim">Модель обучается на <b>ваших</b> закрытых сделках: метка = сделка прибыльная (с учётом комиссий).
+        В режиме «Фильтр» сделка проверяется <b>до</b> исполнения и отклоняется при низкой вероятности.
+        В режиме «Советник» сделка исполняется сразу, а модель после сообщает, хорошая она или её стоит отменить.</p>
+        <div class="model-row">
+          <button id="train-btn" class="btn btn-go">Обучить на моих сделках</button>
+          <span id="train-status" class="dim"></span>
+        </div>
+        <div id="model-metrics" class="dim"></div>
+      </div>
+      <div>
+        <h4>Последние вердикты</h4>
+        <div id="verdicts"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-panel hidden" id="tab-settings">
+    <div class="settings-grid">
+      <div>
+        <h4>Объёмы по горячим клавишам (USD)</h4>
+        <div id="size-inputs"></div>
+        <button id="save-sizes" class="btn">Сохранить объёмы</button>
+      </div>
+      <div>
+        <h4>Счёт и комиссии</h4>
+        <label>Комиссия тейкер, % <input id="set-taker" type="number" value="0.1" step="0.01" class="w70"></label>
+        <label>Комиссия мейкер, % <input id="set-maker" type="number" value="0.02" step="0.01" class="w70"></label>
+        <label>Начальный баланс <input id="set-balance" type="number" value="10000" step="1000" class="w90"></label>
+        <button id="apply-settings" class="btn">Применить комиссии</button>
+        <button id="reset-account" class="btn btn-danger">Сбросить счёт</button>
+        <h4>Горячие клавиши</h4>
+        <div class="dim hotkeys-list">
+          1–9 — выбор объёма · B/S — market buy/sell · X — закрыть позицию · C — отменить все лимитки<br>
+          T (удерживать) + ПКМ по стакану/графику — установить стоп или тейк (определяется автоматически)<br>
+          T + ЛКМ — отменить стоп/тейк · Пробел — пауза/продолжить бэктест
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script src="js/app.js"></script>
+<script src="js/chart.js"></script>
+<script src="js/dom.js"></script>
+<script src="js/tabs.js"></script>
+<script src="js/hotkeys.js"></script>
+</body>
+</html>
