@@ -12,7 +12,7 @@
 <!-- ============ ПАНЕЛЬ ИНСТРУМЕНТОВ ============ -->
 <div id="toolbar">
   <div class="tb-row">
-    <span class="logo">⚡ TradingTrainer</span>
+    <span class="logo">TT</span>
 
     <div class="tb-group workspace-switches" aria-label="Панели рабочего пространства">
       <button id="layout-dom" class="tool-btn active" title="Показать/скрыть стакан">▥ Стакан</button>
@@ -21,7 +21,7 @@
       <button id="layout-reset" class="tool-btn subtle" title="Сбросить расположение">↺</button>
     </div>
 
-    <div class="tb-group">
+    <div class="tb-group mode-switcher">
       <button id="mode-live" class="mode-btn active">Live</button>
       <button id="mode-bt" class="mode-btn">Бэктест</button>
     </div>
@@ -35,17 +35,22 @@
         <option value="kucoin">KuCoin</option>
       </select>
       <input id="live-symbol" value="BTC/USDT" spellcheck="false">
-      <select id="live-timeframe" title="Таймфрейм live-графика">
+      <select id="live-timeframe" class="hidden" title="Таймфрейм live-графика">
         <option value="1m">1m</option><option value="3m">3m</option><option value="5m">5m</option>
         <option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="4h">4h</option>
       </select>
-      <label class="live-history-control" title="Количество последних закрытых свечей (минимум 80 для фич модели)">
-        <input id="live-history-enabled" type="checkbox" checked>
-        История
-        <input id="live-history-limit" type="number" value="500" min="80" max="3000" step="20">
-      </label>
       <button id="live-connect" class="btn btn-go">Подключить</button>
     </div>
+
+    <nav id="live-timeframes" class="tb-group timeframe-strip" aria-label="Таймфрейм">
+      <button class="timeframe-btn active" data-timeframe="1m">1m</button>
+      <button class="timeframe-btn" data-timeframe="3m">3m</button>
+      <button class="timeframe-btn" data-timeframe="5m">5m</button>
+      <button class="timeframe-btn" data-timeframe="15m">15m</button>
+      <button class="timeframe-btn" data-timeframe="30m">30m</button>
+      <button class="timeframe-btn" data-timeframe="1h">1h</button>
+      <button class="timeframe-btn" data-timeframe="4h">4h</button>
+    </nav>
 
     <!-- Backtest контролы -->
     <div class="tb-group hidden" id="bt-controls">
@@ -69,35 +74,18 @@
 
     <div class="tb-spacer"></div>
 
-    <div class="tb-group account-info">
-      <span>Баланс <b id="acc-balance">—</b></span>
-      <span>Equity <b id="acc-equity">—</b></span>
-      <span>PnL <b id="acc-pnl">—</b></span>
-      <span>Фандинг <b id="deriv-funding">—</b></span>
-      <span>OI Δ1ч <b id="deriv-oi">—</b></span>
-      <span id="pos-badge" class="hidden"></span>
+    <div class="tb-group top-nav">
+      <button id="open-journal" class="tool-btn">Журнал</button>
+      <button id="open-settings" class="tool-btn">Настройки</button>
     </div>
-  </div>
 
-  <div class="tb-row tb-row2">
-    <div class="tb-group">
-      <span class="lbl">Объём:</span>
-      <b id="cur-size" class="size-badge">$100</b>
-      <span class="hint" id="size-hint">клавиши 1–9</span>
-    </div>
-    <div class="tb-group">
-      <span class="lbl">Мета-модель:</span>
-      <label class="switch"><input type="checkbox" id="meta-enabled"><span class="sl"></span></label>
-      <select id="meta-mode">
-        <option value="filter">Фильтр (до сделки)</option>
-        <option value="advisory">Советник (после сделки)</option>
-      </select>
-      <label>порог <input id="meta-threshold" type="number" value="0.50" step="0.05" min="0.1" max="0.9" class="w55"></label>
-      <span id="meta-status" class="model-off">не обучена</span>
-    </div>
-    <div class="tb-spacer"></div>
-    <div class="tb-group hint" id="hotkey-hint">
-      B — купить · S — продать · X — закрыть · C — отменить · T — стоп/тейк
+    <div class="tb-group account-info">
+      <span class="account-secondary">Баланс <b id="acc-balance">—</b></span>
+      <span class="account-secondary">Equity <b id="acc-equity">—</b></span>
+      <span class="pnl-chip">PnL <b id="acc-pnl">—</b></span>
+      <span class="market-stat">F <b id="deriv-funding">—</b></span>
+      <span class="market-stat">OI <b id="deriv-oi">—</b></span>
+      <span id="pos-badge" class="hidden"></span>
     </div>
   </div>
 </div>
@@ -126,6 +114,13 @@
 
   <div id="dom-resizer" class="splitter splitter-v" title="Изменить ширину стакана"></div>
 
+  <section id="tape-panel" class="workspace-panel" aria-label="Лента принтов">
+    <header class="side-panel-header">
+      <span>Принты</span><span class="dim">цена · объём</span>
+    </header>
+    <div id="tape-list"><div class="tape-empty">Ожидание сделок…</div></div>
+  </section>
+
   <section id="dom-panel" class="workspace-panel">
     <div id="dom-header">
       <span>Стакан</span>
@@ -148,6 +143,10 @@
       <div id="dom-bids"></div>
     </div>
     <div id="dom-hint">ЛКМ бид — лимит buy · ЛКМ аск — market buy<br>ПКМ аск — лимит sell · ПКМ бид — market sell</div>
+    <div id="dom-size-dock">
+      <div class="size-dock-head"><span>Объём заявки</span><b id="cur-size" class="size-badge">$100</b></div>
+      <div id="quick-sizes"></div>
+    </div>
   </section>
 </div>
 
@@ -217,8 +216,26 @@
         <label>До входа, минут <input id="trade-prefix" type="number" value="30" min="0" max="240" class="w70"></label>
         <label>После выхода, минут <input id="trade-suffix" type="number" value="15" min="0" max="240" class="w70"></label>
         <button id="save-trade-context" class="btn">Сохранить контекст</button>
+        <h4>Live-история и таймфрейм</h4>
+        <label class="live-history-control" title="Количество последних закрытых свечей (минимум 80 для фич модели)">
+          <input id="live-history-enabled" type="checkbox" checked>
+          Загружать историю
+          <input id="live-history-limit" type="number" value="500" min="80" max="3000" step="20">
+        </label>
       </div>
       <div>
+        <h4>Мета-модель</h4>
+        <div class="settings-switch-row"><span>Включена</span>
+          <label class="switch"><input type="checkbox" id="meta-enabled"><span class="sl"></span></label>
+        </div>
+        <label>Режим
+          <select id="meta-mode">
+            <option value="filter">Фильтр входов</option>
+            <option value="advisory">Советник</option>
+          </select>
+        </label>
+        <label>Порог <input id="meta-threshold" type="number" value="0.50" step="0.05" min="0.1" max="0.9" class="w55"></label>
+        <div id="meta-status" class="model-off">не обучена</div>
         <h4>Счёт и комиссии</h4>
         <label>Комиссия тейкер, % <input id="set-taker" type="number" value="0.1" step="0.01" class="w70"></label>
         <label>Комиссия мейкер, % <input id="set-maker" type="number" value="0.02" step="0.01" class="w70"></label>

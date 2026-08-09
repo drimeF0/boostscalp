@@ -289,7 +289,7 @@ class Session:
         cur = self.state.builder.current
         self._update_taker_ratio(cur)
         self.send({"type": "tick", "ts": ts, "price": price,
-                   "candle": cur})
+                   "qty": qty, "side": ev.get("side"), "candle": cur})
 
     def _update_taker_ratio(self, candle: Optional[dict]):
         """Восстанавливает taker buy/sell ratio из volume и delta."""

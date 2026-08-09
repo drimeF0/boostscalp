@@ -25,6 +25,60 @@ const App = {
 
 const $ = (id) => document.getElementById(id);
 
+const Tape = { maxRows: 120 };
+
+Tape.clear = function () {
+  $("tape-list").innerHTML = `<div class="tape-empty">Ожидание сделок…</div>`;
+};
+
+Tape.push = function (tick) {
+  if (!tick || !Number.isFinite(tick.price) || tick.price <= 0 ||
+      !Number.isFinite(tick.qty) || tick.qty <= 0) return;
+  const list = $("tape-list");
+  const empty = list.querySelector(".tape-empty");
+  if (empty) empty.remove();
+  const row = document.createElement("div");
+  const side = tick.side === "buy" || tick.side === "sell" ? tick.side : "neutral";
+  row.className = `tape-print ${side}`;
+  const notional = tick.qty * tick.price;
+  const compact = notional >= 1e6 ? `${(notional / 1e6).toFixed(1)}M`
+    : notional >= 1000 ? `${(notional / 1000).toFixed(notional >= 10000 ? 0 : 1)}K`
+    : notional.toFixed(notional >= 100 ? 0 : 1);
+  const decimals = Math.min(8, Math.max(0,
+    -Math.floor(Math.log10(App.tickSize || 0.01) + 1e-9)));
+  row.innerHTML = `<span>${fmt(tick.price, decimals)}</span><span class="tape-qty">${compact}</span>`;
+  list.prepend(row);
+  while (list.children.length > Tape.maxRows) list.lastElementChild.remove();
+};
+
+function setCurrentSize(value) {
+  if (!Number.isFinite(Number(value)) || Number(value) <= 0) return;
+  App.currentSize = Number(value);
+  $("cur-size").textContent = "$" + App.currentSize.toLocaleString("en-US");
+  document.querySelectorAll(".quick-size").forEach((button) =>
+    button.classList.toggle("active", Number(button.dataset.value) === App.currentSize));
+}
+
+function renderQuickSizes() {
+  const box = $("quick-sizes");
+  box.replaceChildren();
+  App.sizes.forEach((value, index) => {
+    const button = document.createElement("button");
+    button.className = "quick-size";
+    button.dataset.value = value;
+    button.title = `Клавиша ${index + 1}`;
+    button.textContent = `$${Number(value).toLocaleString("en-US")}`;
+    button.onclick = () => setCurrentSize(value);
+    box.appendChild(button);
+  });
+  setCurrentSize(App.currentSize);
+}
+
+function syncTimeframeButtons() {
+  document.querySelectorAll(".timeframe-btn").forEach((button) =>
+    button.classList.toggle("active", button.dataset.timeframe === $("live-timeframe").value));
+}
+
 /* ---------------- WS ---------------- */
 
 function wsConnect() {
@@ -52,11 +106,15 @@ function routeMessage(m) {
   switch (m.type) {
     case "state":        onState(m); break;
     case "mode":
+      Tape.clear();
       App.mode = m.mode;
       App.symbol = m.symbol || App.symbol;
       App.timeframe = m.timeframe || App.timeframe;
       $("chart-symbol").textContent = App.symbol;
       $("chart-timeframe").textContent = App.timeframe;
+      $("live-timeframe").value = App.timeframe;
+      syncTimeframeButtons();
+      switchModeUi(m.mode);
       document.querySelector(".panel-meta").textContent = m.mode === "backtest" ? "Replay" : "Live chart";
       break;
     case "history":      Chart.setHistory(m.candles); break;
@@ -108,6 +166,8 @@ function onState(m) {
   App.bt = m.bt;
   $("chart-symbol").textContent = App.symbol;
   $("chart-timeframe").textContent = App.timeframe;
+  $("live-timeframe").value = App.timeframe;
+  syncTimeframeButtons();
   renderAccount(); renderPosition(); Tabs.renderOrders(); Tabs.updateCounts();
   renderBtStatus();
   Chart.updateLines();
@@ -116,6 +176,7 @@ function onState(m) {
 
 function onTick(m) {
   App.lastPrice = m.price;
+  Tape.push(m);
   if (m.candle) Chart.updateCandle(m.candle);
   // локальный пересчёт uPnL для шапки и таблицы
   if (App.position && App.position.qty !== 0) {
@@ -293,7 +354,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (Array.isArray(s) && s.length === 9) App.sizes = s;
   } catch (e) {}
   App.currentSize = App.sizes[0];
-  $("cur-size").textContent = "$" + App.currentSize;
+  renderQuickSizes();
 
   try {
     const history = JSON.parse(localStorage.getItem("tt_live_history") || "null");
@@ -333,6 +394,15 @@ function initToolbar() {
       timeframe: $("live-timeframe").value,
     });
   };
+  document.querySelectorAll(".timeframe-btn").forEach((button) => {
+    button.onclick = () => {
+      $("live-timeframe").value = button.dataset.timeframe;
+      syncTimeframeButtons();
+    };
+  });
+  syncTimeframeButtons();
+  $("open-journal").onclick = () => openBottomTab("trades");
+  $("open-settings").onclick = () => openBottomTab("settings");
   $("live-history-enabled").onchange = () => {
     $("live-history-limit").disabled = !$("live-history-enabled").checked;
   };
@@ -357,10 +427,21 @@ function initToolbar() {
   $("meta-threshold").onchange = sendMetaSettings;
 }
 
+function openBottomTab(name) {
+  if (Layout.state) {
+    Layout.focus = false;
+    Layout.state.bottomVisible = true;
+    Layout.apply(); Layout.save();
+  }
+  const button = document.querySelector(`.tab[data-tab="${name}"]`);
+  if (button) button.click();
+}
+
 function switchModeUi(mode) {
   $("mode-live").classList.toggle("active", mode === "live");
   $("mode-bt").classList.toggle("active", mode === "backtest");
   $("live-controls").classList.toggle("hidden", mode !== "live");
+  $("live-timeframes").classList.toggle("hidden", mode !== "live");
   $("bt-controls").classList.toggle("hidden", mode !== "backtest");
 }
 

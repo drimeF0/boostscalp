@@ -69,6 +69,18 @@ class SessionClosePositionTests(unittest.IsolatedAsyncioTestCase):
         session._update_taker_ratio({"volume": 10, "delta": 4})
         self.assertAlmostEqual(session.state.deriv.taker_ls_ratio, 7 / 3)
 
+    def test_tick_protocol_exposes_print_direction_and_size(self):
+        queue = asyncio.Queue()
+        session = Session(queue)
+        session._on_tick({"ts": 60_000, "price": .02, "qty": 125.0, "side": "sell"})
+
+        messages = []
+        while not queue.empty():
+            messages.append(queue.get_nowait())
+        tick = next(message for message in messages if message["type"] == "tick")
+        self.assertEqual(tick["qty"], 125.0)
+        self.assertEqual(tick["side"], "sell")
+
     async def test_websocket_command_closes_and_acknowledges_position(self):
         queue = asyncio.Queue()
         session = Session(queue)

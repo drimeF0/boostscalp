@@ -63,11 +63,6 @@ Hotkeys.render = function () {
     });
     box.appendChild(row);
   }
-  const b = Hotkeys.bindings;
-  document.getElementById("hotkey-hint").textContent =
-    `${Hotkeys.display(b.buy)} — купить · ${Hotkeys.display(b.sell)} — продать · ` +
-    `${Hotkeys.display(b.close)} — закрыть · ${Hotkeys.display(b.cancel)} — отменить · ` +
-    `${Hotkeys.display(b.sltp)} — стоп/тейк`;
 };
 
 Hotkeys.armSlTp = function () {
@@ -97,8 +92,7 @@ Hotkeys.init = function () {
     if (/^Digit[1-9]$/.test(e.code)) {
       const n = parseInt(e.code.slice(5), 10);
       if (App.sizes[n - 1] != null) {
-        App.currentSize = App.sizes[n - 1];
-        document.getElementById("cur-size").textContent = "$" + App.currentSize;
+        setCurrentSize(App.sizes[n - 1]);
         toast("info", `Объём: $${App.currentSize}`);
       }
       return;

@@ -2,7 +2,7 @@
 "use strict";
 
 const Layout = {
-  defaults: { domWidth: 250, bottomHeight: 220, domVisible: true, bottomVisible: true },
+  defaults: { domWidth: 280, bottomHeight: 220, domVisible: true, bottomVisible: true },
   state: null,
   focus: false,
 };
@@ -72,7 +72,8 @@ Layout.init = function () {
     toast("info", "Расположение панелей сброшено");
   };
   Layout.drag($("dom-resizer"), (e) => {
-    Layout.state.domWidth = Math.max(190, Math.min(520, window.innerWidth - e.clientX));
+    const tapeWidth = document.getElementById("tape-panel").offsetWidth || 0;
+    Layout.state.domWidth = Math.max(210, Math.min(520, window.innerWidth - e.clientX - tapeWidth));
     Layout.apply();
   });
   Layout.drag($("bottom-resizer"), (e) => {

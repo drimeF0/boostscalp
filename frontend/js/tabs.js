@@ -34,7 +34,7 @@ Tabs.init = function () {
     });
     localStorage.setItem("tt_sizes", JSON.stringify(App.sizes));
     App.currentSize = App.sizes[0];
-    document.getElementById("cur-size").textContent = "$" + App.currentSize;
+    renderQuickSizes();
     toast("ok", "Объёмы сохранены");
   };
 
