@@ -187,14 +187,18 @@
     <div class="model-grid">
       <div>
         <h4>Мета-лейблинг (CatBoost)</h4>
-        <p class="dim">Модель обучается на <b>ваших</b> закрытых сделках: метка = сделка прибыльная (с учётом комиссий).
-        В режиме «Фильтр» сделка проверяется <b>до</b> исполнения и отклоняется при низкой вероятности.
-        В режиме «Советник» сделка исполняется сразу, а модель после сообщает, хорошая она или её стоит отменить.</p>
+        <p class="dim">Две независимые модели обучаются на <b>вашей</b> истории. Entry-модель оценивает
+        каждый вход и каждое усреднение; Exit-модель отдельно оценивает состояние позиции при выходе.
+        Сильно коррелирующие признаки удаляются перед обучением. Фильтр блокирует только входы и
+        усреднения — выход всегда остаётся доступен.</p>
         <div class="model-row">
           <button id="train-btn" class="btn btn-go">Обучить на моих сделках</button>
           <span id="train-status" class="dim"></span>
         </div>
-        <div id="model-metrics" class="dim"></div>
+        <div class="model-status-grid">
+          <div><b>Entry / average</b><div id="entry-model-metrics" class="dim"></div></div>
+          <div><b>Exit</b><div id="exit-model-metrics" class="dim"></div></div>
+        </div>
       </div>
       <div>
         <h4>Последние вердикты</h4>
@@ -262,8 +266,12 @@
         <button id="save-trade-tags" class="btn btn-go">Сохранить разбор</button>
       </section>
       <section class="detail-card trade-features-card">
-        <div class="detail-card-title">Фичи CatBoost на входе</div>
+        <div class="detail-card-title">Lifecycle и фичи CatBoost</div>
+        <div id="trade-action-list" class="trade-action-list"></div>
+        <h4>Агрегированный вход</h4>
         <div id="trade-feature-grid" class="feature-grid"></div>
+        <h4>Выход</h4>
+        <div id="trade-exit-feature-grid" class="feature-grid"></div>
       </section>
     </div>
   </section>

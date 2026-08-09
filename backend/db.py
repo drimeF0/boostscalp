@@ -46,6 +46,9 @@ def init_db():
             "entry_tags": "TEXT NOT NULL DEFAULT '[]'",
             "exit_tags": "TEXT NOT NULL DEFAULT '[]'",
             "notes": "TEXT NOT NULL DEFAULT ''",
+            "entry_actions": "TEXT NOT NULL DEFAULT '[]'",
+            "exit_features": "TEXT NOT NULL DEFAULT '{}'",
+            "exit_label": "INTEGER",
         }
         for name, ddl in migrations.items():
             if name not in columns:
@@ -57,8 +60,9 @@ def insert_trade(trade: dict, mode: str = "") -> int:
         cursor = c.execute(
             """INSERT INTO trades
                (symbol, side, qty, entry_price, exit_price, entry_ts, exit_ts,
-                pnl, fee, mode, features, label, context, entry_tags, exit_tags, notes)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                pnl, fee, mode, features, label, context, entry_tags, exit_tags, notes,
+                entry_actions, exit_features, exit_label)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trade.get("symbol", ""),
                 trade.get("side", ""),
@@ -76,6 +80,9 @@ def insert_trade(trade: dict, mode: str = "") -> int:
                 json.dumps(trade.get("entryTags") or []),
                 json.dumps(trade.get("exitTags") or []),
                 str(trade.get("notes") or ""),
+                json.dumps(trade.get("entryActions") or []),
+                json.dumps(trade.get("exitFeatures") or {}),
+                trade.get("exitLabel"),
             ),
         )
         return int(cursor.lastrowid)
@@ -89,10 +96,12 @@ def fetch_trades(limit: int = 500) -> List[dict]:
     out = []
     for r in rows:
         d = dict(r)
-        try:
-            d["features"] = json.loads(d.get("features") or "{}")
-        except Exception:
-            d["features"] = {}
+        for key, fallback in (("features", {}), ("entry_actions", []),
+                              ("exit_features", {})):
+            try:
+                d[key] = json.loads(d.get(key) or json.dumps(fallback))
+            except Exception:
+                d[key] = fallback
         out.append(d)
     return out
 
@@ -104,7 +113,8 @@ def fetch_trade(trade_id: int) -> Optional[dict]:
         return None
     result = dict(row)
     for key, fallback in (("features", {}), ("context", []),
-                          ("entry_tags", []), ("exit_tags", [])):
+                          ("entry_tags", []), ("exit_tags", []),
+                          ("entry_actions", []), ("exit_features", {})):
         try:
             result[key] = json.loads(result.get(key) or json.dumps(fallback))
         except (TypeError, json.JSONDecodeError):

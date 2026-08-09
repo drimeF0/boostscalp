@@ -16,7 +16,8 @@ const App = {
   account: {},
   trades: [],
   tradesCount: 0,
-  meta: { enabled: false, mode: "filter", threshold: 0.5, trained: false },
+  meta: { enabled: false, mode: "filter", threshold: 0.5, trained: false,
+          entry: null, exit: null },
   bt: { running: false, paused: false, pct: 0, speed: 5, ts: null },
   slTpArmed: false,         // удерживается клавиша T
   closePending: false,
@@ -139,14 +140,17 @@ function onTradeClosed(t) {
 }
 
 function onModelStatus(m) {
-  App.meta.trained = m.trained;
+  const entry = m.entry || m;
+  const exitModel = m.exit || { trained: false, nSamples: 0, metrics: {}, minTrades: entry.minTrades };
+  App.meta.entry = entry;
+  App.meta.exit = exitModel;
+  App.meta.trained = entry.trained;
   const el = $("meta-status");
-  if (m.trained) {
-    el.textContent = `обучена (${m.nSamples} сделок` +
-      (m.metrics && m.metrics.auc != null ? `, AUC ${m.metrics.auc.toFixed(3)}` : "") + ")";
+  if (entry.trained || exitModel.trained) {
+    el.textContent = `Entry ${entry.trained ? "✓" : "—"} · Exit ${exitModel.trained ? "✓" : "—"}`;
     el.className = "model-on";
   } else {
-    el.textContent = `не обучена (сделок: ${m.tradesCount || 0}/${m.minTrades || 20})`;
+    el.textContent = `не обучены (сделок: ${m.tradesCount || 0}/${entry.minTrades || 20})`;
     el.className = "model-off";
   }
   // синхронизируем контролы с серверным состоянием
@@ -156,12 +160,21 @@ function onModelStatus(m) {
     $("meta-mode").value = m.mode;
     $("meta-threshold").value = m.threshold;
   }
-  const met = $("model-metrics");
-  if (m.trained && m.metrics) {
-    met.textContent = `Сэмплов: ${m.nSamples} · train/test: ${m.metrics.n_train}/${m.metrics.n_test} · ` +
-      `AUC: ${m.metrics.auc != null ? m.metrics.auc.toFixed(3) : "—"} · ` +
-      `Accuracy: ${(m.metrics.accuracy * 100).toFixed(1)}% · доля прибыльных: ${(m.metrics.pos_rate * 100).toFixed(0)}%`;
+  renderModelMetrics("entry-model-metrics", entry);
+  renderModelMetrics("exit-model-metrics", exitModel);
+}
+
+function renderModelMetrics(elementId, model) {
+  const met = $(elementId);
+  if (!model.trained || !model.metrics) {
+    met.textContent = `Не обучена · событий: ${model.nSamples || 0}/${model.minTrades || 20}`;
+    return;
   }
+  const mm = model.metrics;
+  met.textContent = `Событий: ${model.nSamples} · train/test: ${mm.n_train}/${mm.n_test} · ` +
+    `AUC: ${mm.auc != null ? mm.auc.toFixed(3) : "—"} · ` +
+    `Accuracy: ${(mm.accuracy * 100).toFixed(1)}% · фич: ${mm.features_selected}/${mm.features_total}` +
+    (mm.features_dropped ? ` (убрано ${mm.features_dropped})` : "");
 }
 
 function onVerdict(v) {
@@ -169,14 +182,15 @@ function onVerdict(v) {
   el.className = "verdict " + (v.accepted ? "ok" : "bad");
   const t = new Date().toLocaleTimeString();
   const side = v.side === "buy" ? "BUY" : "SELL";
+  const phase = v.action === "average" ? "AVERAGE" : (v.modelKind === "exit" ? "EXIT" : "ENTRY");
   if (v.mode === "filter") {
     el.textContent = v.accepted
-      ? `${t} · Фильтр пропустил ${side} (p=${v.proba.toFixed(2)})`
-      : `${t} · Фильтр ОТКЛОНИЛ ${side} (p=${v.proba.toFixed(2)} < ${v.threshold})`;
+      ? `${t} · ${phase}: фильтр пропустил ${side} (p=${v.proba.toFixed(2)})`
+      : `${t} · ${phase}: фильтр ОТКЛОНИЛ ${side} (p=${v.proba.toFixed(2)} < ${v.threshold})`;
   } else {
     el.textContent = v.accepted
-      ? `${t} · Советник: ${side} выглядит хорошо (p=${v.proba.toFixed(2)})`
-      : `${t} · Советник: ${side} ПЛОХАЯ (p=${v.proba.toFixed(2)}) — рекомендует закрыть`;
+      ? `${t} · ${phase}: ${side} выглядит хорошо (p=${v.proba.toFixed(2)})`
+      : `${t} · ${phase}: ${side} оценён низко (p=${v.proba.toFixed(2)})`;
   }
   const box = $("verdicts");
   box.prepend(el);

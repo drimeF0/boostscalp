@@ -32,7 +32,8 @@ class Order:
 
 
 class Position:
-    __slots__ = ("qty", "entry", "sl", "tp", "open_ts", "entry_features", "fees_paid")
+    __slots__ = ("qty", "entry", "sl", "tp", "open_ts", "entry_features",
+                 "entry_actions", "fees_paid")
 
     def __init__(self):
         self.qty = 0.0            # знаковое количество базовой валюты
@@ -41,6 +42,7 @@ class Position:
         self.tp: Optional[float] = None
         self.open_ts: int = 0
         self.entry_features: Optional[dict] = None
+        self.entry_actions: List[dict] = []
         self.fees_paid: float = 0.0
 
     def to_dict(self, last_price: float):
@@ -48,6 +50,7 @@ class Position:
         return {
             "qty": self.qty, "entry": self.entry, "sl": self.sl, "tp": self.tp,
             "upnl": upnl, "openTs": self.open_ts,
+            "scaleIns": max(0, len(self.entry_actions) - 1),
         }
 
 
@@ -140,44 +143,68 @@ class PaperBroker:
                 p.open_ts = ts
                 p.entry_features = features
                 p.fees_paid = 0.0
+                p.entry_actions = []
             else:
                 p.entry = (p.entry * abs(p.qty) + price * abs(signed)) / abs(new_qty)
+            action_kind = "entry" if p.qty == 0 else "average"
+            p.entry_actions.append({
+                "action": action_kind, "side": side, "qty": qty, "price": price,
+                "ts": ts, "features": features or {},
+            })
             p.qty = new_qty
             p.fees_paid += fee
         else:
             # закрытие / разворот
             close_qty = min(abs(signed), abs(p.qty))
-            pnl = (price - p.entry) * close_qty * (1 if p.qty > 0 else -1)
-            pnl -= p.fees_paid * (close_qty / abs(p.qty)) + fee
+            original_qty = p.qty
+            entry_fee_share = p.fees_paid * (close_qty / abs(original_qty))
+            close_fee = close_qty * price * fee_rate
+            pnl = (price - p.entry) * close_qty * (1 if original_qty > 0 else -1)
+            pnl -= entry_fee_share + close_fee
             self.realized += pnl
             self.balance += pnl
-            remaining = signed + p.qty  # что осталось после закрытия
+            remaining = signed + original_qty  # что осталось после закрытия
+            entry_actions = [dict(action) for action in p.entry_actions]
             closing_trade = {
                 "seq": next(self.trade_seq),
                 "symbol": st.symbol,
-                "side": "buy" if p.qty > 0 else "sell",
+                "side": "buy" if original_qty > 0 else "sell",
                 "qty": close_qty,
                 "entryPrice": p.entry,
                 "exitPrice": price,
                 "entryTs": p.open_ts,
                 "exitTs": ts,
                 "pnl": pnl,
-                "fee": p.fees_paid * (close_qty / abs(p.qty)) + fee,
-                "features": p.entry_features,
+                "fee": entry_fee_share + close_fee,
+                "features": _weighted_features(entry_actions) or p.entry_features,
+                "entryActions": entry_actions,
+                "exitFeatures": features or {},
                 "label": 1 if pnl > 0 else 0,
+                "exitLabel": 1 if pnl > 0 else 0,
             }
-            p.fees_paid *= max(0.0, 1 - close_qty / abs(p.qty))
+            p.fees_paid *= max(0.0, 1 - close_qty / abs(original_qty))
             if abs(remaining) < 1e-12:
                 p.qty = 0.0
                 p.entry = 0.0
                 p.sl = p.tp = None
                 p.entry_features = None
+                p.entry_actions = []
+            elif (remaining > 0) == (original_qty > 0):
+                # Частичное сокращение: средняя входа и история усреднений
+                # сохраняются, меняется только размер позиции.
+                p.qty = remaining
             else:
-                # разворот
+                # Разворот остатком встречного ордера.
                 p.qty = remaining
                 p.entry = price
                 p.open_ts = ts
-                p.entry_features = features
+                p.entry_features = None
+                residual_qty = abs(remaining)
+                p.entry_actions = [{
+                    "action": "entry", "side": side, "qty": residual_qty,
+                    "price": price, "ts": ts, "features": {},
+                }]
+                p.fees_paid = residual_qty * price * fee_rate
                 p.sl = p.tp = None
 
         self.emit("fill", {
@@ -223,12 +250,12 @@ class PaperBroker:
         self.orders.clear()
         self.emit("orders", self.orders_list())
 
-    def close_position(self, ts: int) -> Optional[dict]:
+    def close_position(self, ts: int, features: Optional[dict] = None) -> Optional[dict]:
         p = self.position
         if not math.isfinite(p.qty) or abs(p.qty) < 1e-12:
             return None
         side = "sell" if p.qty > 0 else "buy"
-        return self.place_market(side, abs(p.qty), ts)
+        return self.place_market(side, abs(p.qty), ts, features)
 
     # -------------------- стоп / тейк --------------------
 
@@ -253,7 +280,7 @@ class PaperBroker:
 
     # -------------------- тиковый матчинг --------------------
 
-    def on_tick(self, ts: int, price: float):
+    def on_tick(self, ts: int, price: float, exit_features: Optional[dict] = None):
         # 1) лимитные ордера
         filled = []
         for oid, o in self.orders.items():
@@ -270,11 +297,28 @@ class PaperBroker:
         p = self.position
         if p.qty > 0:
             if p.sl is not None and price <= p.sl:
-                self.place_market("sell", abs(p.qty), ts)
+                self.place_market("sell", abs(p.qty), ts, exit_features)
             elif p.tp is not None and price >= p.tp:
-                self.place_market("sell", abs(p.qty), ts)
+                self.place_market("sell", abs(p.qty), ts, exit_features)
         elif p.qty < 0:
             if p.sl is not None and price >= p.sl:
-                self.place_market("buy", abs(p.qty), ts)
+                self.place_market("buy", abs(p.qty), ts, exit_features)
             elif p.tp is not None and price <= p.tp:
-                self.place_market("buy", abs(p.qty), ts)
+                self.place_market("buy", abs(p.qty), ts, exit_features)
+
+
+def _weighted_features(actions: List[dict]) -> Optional[dict]:
+    weighted: Dict[str, float] = {}
+    total = 0.0
+    for action in actions:
+        qty = float(action.get("qty") or 0.0)
+        features = action.get("features") or {}
+        if qty <= 0 or not features:
+            continue
+        total += qty
+        for key, value in features.items():
+            try:
+                weighted[key] = weighted.get(key, 0.0) + float(value) * qty
+            except (TypeError, ValueError):
+                continue
+    return ({key: value / total for key, value in weighted.items()} if total > 0 else None)

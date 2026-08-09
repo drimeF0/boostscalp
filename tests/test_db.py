@@ -39,6 +39,9 @@ class TradeDatabaseMigrationTests(unittest.TestCase):
         self.assertEqual(trade["context"], [])
         self.assertEqual(trade["entry_tags"], [])
         self.assertEqual(trade["exit_tags"], [])
+        self.assertEqual(trade["entry_actions"], [])
+        self.assertEqual(trade["exit_features"], {})
+        self.assertIsNone(trade["exit_label"])
 
     def test_context_features_and_tags_round_trip(self):
         db.init_db()
@@ -47,6 +50,9 @@ class TradeDatabaseMigrationTests(unittest.TestCase):
             "entryPrice": .02, "exitPrice": .021, "entryTs": 60_000,
             "exitTs": 120_000, "pnl": 2, "fee": .1, "label": 1,
             "features": {"rsi14": 55.5},
+            "entryActions": [{"action": "entry", "qty": 2,
+                              "features": {"rsi14": 55.5}}],
+            "exitFeatures": {"position_pnl_pct": 5.0}, "exitLabel": 1,
             "context": [{"time": 60, "open": .02, "high": .021,
                          "low": .019, "close": .0205, "volume": 10}],
         }, "live")
@@ -56,6 +62,9 @@ class TradeDatabaseMigrationTests(unittest.TestCase):
 
         trade = db.fetch_trade(trade_id)
         self.assertEqual(trade["features"], {"rsi14": 55.5})
+        self.assertEqual(len(trade["entry_actions"]), 1)
+        self.assertEqual(trade["exit_features"], {"position_pnl_pct": 5.0})
+        self.assertEqual(trade["exit_label"], 1)
         self.assertEqual(trade["entry_tags"], ["пробой", "объём"])
         self.assertEqual(trade["exit_tags"], ["тейк"])
         self.assertEqual(trade["notes"], "по плану")
@@ -99,12 +108,12 @@ class TradeDetailProtocolTests(unittest.IsolatedAsyncioTestCase):
         session = Session(queue)
         session.mode = "live"
         session.symbol = session.state.symbol = "TUT/USDT"
-        for minute in range(40):
+        for minute in range(80):
             session.state.candles.append({
                 "time": minute * 60, "open": .02, "high": .021,
                 "low": .019, "close": .0205, "volume": 10, "delta": 2,
             })
-        session.state.last_ts = 39 * 60_000
+        session.state.last_ts = 79 * 60_000
         session.state.last_price = .0205
         session.state.on_book([[.0204, 10000]], [[.0206, 10000]])
 
@@ -121,6 +130,8 @@ class TradeDetailProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail["id"], 1)
         self.assertTrue(detail["candles"])
         self.assertIn("rsi14", detail["features"])
+        self.assertEqual(len(detail["entryActions"]), 1)
+        self.assertIn("position_pnl_pct", detail["exitFeatures"])
 
         await session.handle({"type": "update_trade_tags", "tradeId": 1,
                               "entryTags": ["пробой"], "exitTags": ["ручной"],

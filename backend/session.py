@@ -30,7 +30,9 @@ class Session:
         self.broker = PaperBroker(self.state, DEFAULT_START_BALANCE,
                                   DEFAULT_TAKER_FEE, DEFAULT_MAKER_FEE)
         self.broker.subscribe(self._on_broker_event)
-        self.model = MetaModel()
+        self.entry_model = MetaModel("entry")
+        self.exit_model = MetaModel("exit")
+        self.model = self.entry_model  # compatibility для старых интеграций
         self.meta_enabled = False
         self.meta_mode = "filter"          # "filter" | "advisory"
         self.meta_threshold = DEFAULT_THRESHOLD
@@ -55,6 +57,11 @@ class Session:
     def _on_broker_event(self, kind: str, payload: dict):
         if kind == "trade_closed":
             saved = dict(payload)
+            if not saved.get("exitFeatures"):
+                saved["exitFeatures"] = compute_features(
+                    self.state, saved["side"], self.broker.position, action="exit",
+                ) or {}
+            saved["exitLabel"] = int(saved.get("exitLabel", saved.get("label", 0)))
             saved["context"] = self._context_candles(payload["entryTs"], payload["exitTs"], 240, 0)
             trade_id = insert_trade(saved, mode=self.mode or "")
             saved["id"] = trade_id
@@ -84,7 +91,7 @@ class Session:
             elif t == "cancel_all":
                 self.broker.cancel_all()
             elif t == "close_position":
-                result = self.broker.close_position(self.state.last_ts or _now_ms())
+                result = self.close_position_with_meta()
                 if result is None:
                     self.notify("warn", "Нет открытой позиции")
                 else:
@@ -144,7 +151,10 @@ class Session:
         """Остановить текущий фид, закрыть позицию/ордера, сбросить состояние."""
         await self._stop_feed()
         if self.broker.position.qty != 0:
-            self.broker.close_position(self.state.last_ts or _now_ms())
+            p = self.broker.position
+            side = "buy" if p.qty > 0 else "sell"
+            features = compute_features(self.state, side, p, action="exit")
+            self.broker.close_position(self.state.last_ts or _now_ms(), features)
         self.broker.cancel_all()
         self.symbol = symbol
         tick = DEFAULT_TICK_SIZES.get(symbol, DEFAULT_TICK_SIZE)
@@ -270,7 +280,12 @@ class Session:
             log.warning("ignored invalid/out-of-order tick: %r", ev)
             return
         self.state.on_tick(price, qty, ts, ev.get("side"))
-        self.broker.on_tick(ts, price)
+        p = self.broker.position
+        exit_features = None
+        if p.qty:
+            position_side = "buy" if p.qty > 0 else "sell"
+            exit_features = compute_features(self.state, position_side, p, action="exit")
+        self.broker.on_tick(ts, price, exit_features)
         cur = self.state.builder.current
         self._update_taker_ratio(cur)
         self.send({"type": "tick", "ts": ts, "price": price,
@@ -303,27 +318,37 @@ class Session:
         qty = size_usd / (float(price) if (otype == "limit" and price) else self.state.last_price)
         ts = self.state.last_ts or _now_ms()
 
-        features = compute_features(self.state, side)
+        position = self.broker.position
+        same_direction = (position.qty == 0 or
+                          (position.qty > 0 and side == "buy") or
+                          (position.qty < 0 and side == "sell"))
+        action = ("entry" if position.qty == 0 else "average") if same_direction else "exit"
+        feature_side = side if same_direction else ("buy" if position.qty > 0 else "sell")
+        features = compute_features(self.state, feature_side, position, action=action)
+        model = self.entry_model if same_direction else self.exit_model
 
         # --- мета-модель ---
-        if self.meta_enabled and self.model.trained and features:
-            proba = self.model.predict_proba(features)
+        if self.meta_enabled and model.trained and features:
+            proba = model.predict_proba(features)
             if proba is not None:
                 ok = proba >= self.meta_threshold
-                if self.meta_mode == "filter" and not ok:
+                # Выход никогда не блокируем: модель может только оценить его.
+                if same_direction and self.meta_mode == "filter" and not ok:
                     self.send({"type": "meta_verdict", "mode": "filter",
                                "accepted": False, "proba": proba,
-                               "threshold": self.meta_threshold, "side": side})
+                               "threshold": self.meta_threshold, "side": side,
+                               "modelKind": model.kind, "action": action})
                     self.notify("warn",
                                 f"Мета-модель ОТКЛОНИЛА сделку {side.upper()} "
                                 f"(p={proba:.2f} < {self.meta_threshold:.2f})")
                     return
                 # filter-accept или advisory: исполняем
                 result = self._execute(side, otype, qty, price, ts, features)
-                if self.meta_mode == "advisory":
+                if self.meta_mode == "advisory" or not same_direction:
                     self.send({"type": "meta_verdict", "mode": "advisory",
                                "accepted": ok, "proba": proba,
-                               "threshold": self.meta_threshold, "side": side})
+                               "threshold": self.meta_threshold, "side": side,
+                               "modelKind": model.kind, "action": action})
                     if ok:
                         self.notify("ok", f"Мета-модель одобряет {side.upper()} (p={proba:.2f})")
                     else:
@@ -333,9 +358,25 @@ class Session:
                 else:
                     self.send({"type": "meta_verdict", "mode": "filter",
                                "accepted": True, "proba": proba,
-                               "threshold": self.meta_threshold, "side": side})
+                               "threshold": self.meta_threshold, "side": side,
+                               "modelKind": model.kind, "action": action})
                 return result
         self._execute(side, otype, qty, price, ts, features)
+
+    def close_position_with_meta(self):
+        position = self.broker.position
+        if not position.qty:
+            return None
+        side = "buy" if position.qty > 0 else "sell"
+        features = compute_features(self.state, side, position, action="exit")
+        if self.meta_enabled and self.exit_model.trained and features:
+            proba = self.exit_model.predict_proba(features)
+            if proba is not None:
+                self.send({"type": "meta_verdict", "mode": "advisory",
+                           "accepted": proba >= self.meta_threshold, "proba": proba,
+                           "threshold": self.meta_threshold, "side": side,
+                           "modelKind": "exit", "action": "exit"})
+        return self.broker.close_position(self.state.last_ts or _now_ms(), features)
 
     def _execute(self, side, otype, qty, price, ts, features):
         if otype == "limit" and price:
@@ -347,19 +388,28 @@ class Session:
     async def train_model(self):
         trades = fetch_trades(10_000)
         loop = asyncio.get_running_loop()
-        try:
-            metrics = await loop.run_in_executor(None, self.model.train, trades)
-            self.notify("ok", f"Модель обучена на {self.model.n_samples} сделках. "
-                              f"AUC={metrics.get('auc')}, acc={metrics.get('accuracy'):.3f}")
-        except ValueError as e:
-            self.notify("warn", str(e))
-        except Exception as e:
-            log.exception("train failed")
-            self.notify("error", f"Ошибка обучения: {e}")
+        entry_samples, exit_samples = _model_samples(trades)
+        for model, samples, title in (
+            (self.entry_model, entry_samples, "Entry"),
+            (self.exit_model, exit_samples, "Exit"),
+        ):
+            try:
+                metrics = await loop.run_in_executor(None, model.train, samples)
+                self.notify("ok", f"{title}-модель: {model.n_samples} событий, "
+                                   f"фич {metrics['features_selected']}/{metrics['features_total']}, "
+                                   f"AUC={metrics.get('auc')}")
+            except ValueError as e:
+                self.notify("warn", str(e))
+            except Exception as e:
+                log.exception("%s train failed", model.kind)
+                self.notify("error", f"Ошибка {title}-модели: {e}")
         self.send_model_status()
 
     def send_model_status(self):
-        st = self.model.status()
+        entry, exit_ = self.entry_model.status(), self.exit_model.status()
+        st = {"entry": entry, "exit": exit_,
+              "trained": entry["trained"], "nSamples": entry["nSamples"],
+              "metrics": entry["metrics"], "minTrades": entry["minTrades"]}
         st.update({"enabled": self.meta_enabled, "mode": self.meta_mode,
                    "threshold": self.meta_threshold, "tradesCount": count_trades()})
         self.send({"type": "model_status", **st})
@@ -465,7 +515,8 @@ def _now_ms() -> int:
 
 
 def _public_trade(t: dict) -> dict:
-    return {k: v for k, v in t.items() if k != "features"}
+    private = {"features", "entryActions", "exitFeatures"}
+    return {k: v for k, v in t.items() if k not in private}
 
 
 def _db_trade_public(t: dict) -> dict:
@@ -483,6 +534,9 @@ def _db_trade_detail(t: dict, context: list[dict]) -> dict:
     result = _db_trade_public(t)
     result.update({
         "features": _json_value(t.get("features"), {}),
+        "entryActions": _json_value(t.get("entry_actions"), []),
+        "exitFeatures": _json_value(t.get("exit_features"), {}),
+        "exitLabel": t.get("exit_label"),
         "candles": context,
         "notes": t.get("notes") or "",
     })
@@ -510,3 +564,26 @@ def _clean_tags(value) -> list[str]:
         if tag and tag not in result:
             result.append(tag)
     return result[:20]
+
+
+def _model_samples(trades: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Разворачивает lifecycle сделки в независимые entry/average и exit samples."""
+    entry_samples, exit_samples = [], []
+    for trade in trades:
+        label = int(trade.get("label", 0))
+        actions = trade.get("entry_actions") or []
+        if actions:
+            for action in reversed(actions):
+                if action.get("features"):
+                    entry_samples.append({"features": action["features"], "label": label,
+                                          "action": action.get("action", "entry")})
+        elif trade.get("features"):
+            # Совместимость со сделками до появления action journal.
+            entry_samples.append({"features": trade["features"], "label": label,
+                                  "action": "entry"})
+        exit_features = trade.get("exit_features") or {}
+        exit_label = trade.get("exit_label")
+        if exit_features and exit_label is not None:
+            exit_samples.append({"features": exit_features, "label": int(exit_label),
+                                 "action": "exit"})
+    return entry_samples, exit_samples

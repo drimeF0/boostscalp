@@ -44,6 +44,8 @@ TradeDetail.open = function (tradeId) {
   $("trade-exit-tags").value = "";
   $("trade-notes").value = "";
   $("trade-feature-grid").innerHTML = `<div class="dim">Загрузка…</div>`;
+  $("trade-exit-feature-grid").innerHTML = `<div class="dim">Загрузка…</div>`;
+  $("trade-action-list").innerHTML = "";
   TradeDetail.resetChart();
   send({ type: "get_trade_detail", tradeId, requestId: TradeDetail.activeRequestId, ...settings });
 };
@@ -72,16 +74,26 @@ TradeDetail.render = function (trade, requestId) {
   $("trade-entry-tags").value = (trade.entryTags || []).join(", ");
   $("trade-exit-tags").value = (trade.exitTags || []).join(", ");
   $("trade-notes").value = trade.notes || "";
-  TradeDetail.renderFeatures(trade.features || {});
+  TradeDetail.renderActions(trade.entryActions || []);
+  TradeDetail.renderFeatures("trade-feature-grid", trade.features || {}, "входа");
+  TradeDetail.renderFeatures("trade-exit-feature-grid", trade.exitFeatures || {}, "выхода");
   TradeDetail.renderChart(trade);
 };
 
-TradeDetail.renderFeatures = function (features) {
-  const box = $("trade-feature-grid");
+TradeDetail.renderActions = function (actions) {
+  const box = $("trade-action-list");
+  box.innerHTML = actions.length ? actions.map((action, index) => {
+    const label = action.action === "average" ? `Усреднение ${index}` : "Первичный вход";
+    return `<span><b>${label}</b> · ${Number(action.qty || 0).toFixed(5)} @ ${fmt(action.price || 0, 6)} · ${new Date(action.ts).toLocaleTimeString()}</span>`;
+  }).join("") : `<span>Legacy-сделка без журнала усреднений</span>`;
+};
+
+TradeDetail.renderFeatures = function (elementId, features, phase) {
+  const box = $(elementId);
   const entries = Object.entries(features);
   box.innerHTML = entries.length ? entries.map(([key, value]) => `
     <div><span>${escapeHtml(key)}</span><b>${typeof value === "number" ? Number(value).toLocaleString("en-US", { maximumFractionDigits: 6 }) : escapeHtml(String(value))}</b></div>
-  `).join("") : `<div class="dim">Фичи отсутствуют: для расчёта требуется минимум 30 свечей до входа.</div>`;
+  `).join("") : `<div class="dim">Фичи ${phase} отсутствуют: для расчёта требуется минимум 61 свеча.</div>`;
 };
 
 TradeDetail.ensureChart = function () {

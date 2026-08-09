@@ -40,6 +40,28 @@ class ClosePositionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "рыночной цены"):
             broker.place_market("buy", 1, 1)
 
+    def test_averaging_is_kept_as_actions_of_one_trade(self):
+        first = {"action_is_average": 0.0, "ret_5m": 1.0}
+        average = {"action_is_average": 1.0, "ret_5m": 3.0}
+        exit_features = {"action_is_exit": 1.0, "position_pnl_pct": 2.5}
+        self.broker.place_market("buy", 1000, 1, first)
+        self.broker.place_market("buy", 3000, 2, average)
+        self.broker.close_position(3, exit_features)
+
+        trade = next(payload for kind, payload in self.events if kind == "trade_closed")
+        self.assertEqual([a["action"] for a in trade["entryActions"]],
+                         ["entry", "average"])
+        self.assertEqual(trade["exitFeatures"], exit_features)
+        self.assertAlmostEqual(trade["features"]["ret_5m"], 2.5)
+
+    def test_partial_exit_preserves_entry_action_history(self):
+        self.broker.place_market("buy", 4000, 1, {"ret_5m": 1.0})
+        self.broker.place_market("sell", 1000, 2, {"action_is_exit": 1.0})
+
+        self.assertEqual(self.broker.position.qty, 3000)
+        self.assertEqual(len(self.broker.position.entry_actions), 1)
+        self.assertEqual(self.broker.position.entry_actions[0]["features"]["ret_5m"], 1.0)
+
 
 class SessionClosePositionTests(unittest.IsolatedAsyncioTestCase):
     def test_taker_ratio_is_reconstructed_from_delta_history(self):

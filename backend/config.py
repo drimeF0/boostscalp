@@ -6,8 +6,13 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 DB_PATH = os.path.join(DATA_DIR, "trades.db")
-MODEL_PATH = os.path.join(MODELS_DIR, "meta_model.cbm")
-MODEL_META_PATH = os.path.join(MODELS_DIR, "meta_model.json")
+ENTRY_MODEL_PATH = os.path.join(MODELS_DIR, "entry_meta_model.cbm")
+ENTRY_MODEL_META_PATH = os.path.join(MODELS_DIR, "entry_meta_model.json")
+EXIT_MODEL_PATH = os.path.join(MODELS_DIR, "exit_meta_model.cbm")
+EXIT_MODEL_META_PATH = os.path.join(MODELS_DIR, "exit_meta_model.json")
+# Старые имена оставлены как alias для совместимости импортов.
+MODEL_PATH = ENTRY_MODEL_PATH
+MODEL_META_PATH = ENTRY_MODEL_META_PATH
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -38,3 +43,4 @@ DEFAULT_TICK_SIZE = 0.01
 # --- Мета-модель ---
 MIN_TRADES_TO_TRAIN = 20
 DEFAULT_THRESHOLD = 0.5
+FEATURE_CORRELATION_THRESHOLD = 0.92

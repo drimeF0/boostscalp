@@ -49,7 +49,10 @@ async def ws_endpoint(ws: WebSocket):
     wtask = asyncio.create_task(writer())
     session.send_state()
     # модель подгружаем асинхронно — статус придёт отдельным сообщением
-    await asyncio.to_thread(session.model.load)
+    await asyncio.gather(
+        asyncio.to_thread(session.entry_model.load),
+        asyncio.to_thread(session.exit_model.load),
+    )
     session.send_model_status()
     try:
         while True:
