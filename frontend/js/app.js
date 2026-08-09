@@ -78,6 +78,7 @@ function routeMessage(m) {
     case "bt_status":    App.bt = m; renderBtStatus(); break;
     case "deriv":        renderDeriv(m); break;
     case "trade_detail": TradeDetail.render(m.trade, m.requestId); break;
+    case "indicator_history": Chart.setIndicatorHistory(m); break;
   }
 }
 
@@ -284,7 +285,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const history = JSON.parse(localStorage.getItem("tt_live_history") || "null");
     if (history) {
       $("live-history-enabled").checked = history.enabled !== false;
-      $("live-history-limit").value = Math.max(50, Math.min(3000, Number(history.limit) || 500));
+      $("live-history-limit").value = Math.max(80, Math.min(3000, Number(history.limit) || 500));
       $("live-timeframe").value = history.timeframe || "1m";
     }
   } catch (e) {}
@@ -305,7 +306,7 @@ function initToolbar() {
   $("mode-bt").onclick = () => switchModeUi("backtest");
   $("live-connect").onclick = () => {
     const historyEnabled = $("live-history-enabled").checked;
-    const historyLimit = Math.max(50, Math.min(3000, parseInt($("live-history-limit").value, 10) || 500));
+    const historyLimit = Math.max(80, Math.min(3000, parseInt($("live-history-limit").value, 10) || 500));
     $("live-history-limit").value = historyLimit;
     localStorage.setItem("tt_live_history", JSON.stringify({
       enabled: historyEnabled, limit: historyLimit, timeframe: $("live-timeframe").value,

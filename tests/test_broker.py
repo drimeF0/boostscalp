@@ -42,6 +42,11 @@ class ClosePositionTests(unittest.TestCase):
 
 
 class SessionClosePositionTests(unittest.IsolatedAsyncioTestCase):
+    def test_taker_ratio_is_reconstructed_from_delta_history(self):
+        session = Session(asyncio.Queue())
+        session._update_taker_ratio({"volume": 10, "delta": 4})
+        self.assertAlmostEqual(session.state.deriv.taker_ls_ratio, 7 / 3)
+
     async def test_websocket_command_closes_and_acknowledges_position(self):
         queue = asyncio.Queue()
         session = Session(queue)

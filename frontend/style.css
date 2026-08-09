@@ -136,6 +136,11 @@ input:focus, select:focus { border-color: var(--accent); }
 .tool-separator { width: 1px; height: 15px; margin: 0 3px; background: var(--border); }
 .status-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--green); }
 #chart { position: absolute; inset: var(--titlebar) 0 0; }
+#drawing-overlay { position: absolute; inset: var(--titlebar) 0 0; z-index: 3; width: 100%; height: calc(100% - var(--titlebar)); pointer-events: none; overflow: hidden; }
+#drawing-overlay .drawing-visible { pointer-events: none; }
+#drawing-overlay .drawing-hit { pointer-events: stroke; cursor: context-menu; }
+#drawing-overlay .drawing-hit.rect-hit { pointer-events: all; }
+#drawing-overlay .drawing-preview { pointer-events: none; opacity: .72; stroke-dasharray: 5 4; }
 
 .splitter { flex: 0 0 auto; background: var(--border); z-index: 5; transition: background .12s; }
 .splitter:hover, .is-resizing .splitter { background: var(--accent); }

@@ -22,6 +22,20 @@ class FakeExchange:
             [180_000, 12, 13, 11, 12, 20],
         ]
 
+    async def fapiPublicGetKlines(self, params):
+        self.delta_params = params
+        return [
+            [60_000, "10", "12", "9", "11", "10", 0, 0, 0, "7"],
+            [180_000, "11", "12", "10", "11", "5", 0, 0, 0, "2"],
+        ]
+
+    async def fetch_open_interest_history(self, symbol, timeframe, since, limit):
+        self.oi_timeframe = timeframe
+        return [
+            {"timestamp": 60_000, "openInterestAmount": 100},
+            {"timestamp": 120_000, "openInterestAmount": 110},
+        ]
+
     async def watch_trades(self, symbol):
         await asyncio.sleep(0)
         return [
@@ -52,6 +66,7 @@ class LiveFeedTests(unittest.IsolatedAsyncioTestCase):
         async def fake_open():
             feed.exchange = exchange
             feed.tick_size = 0.0001
+            feed.market_id = "TUTUSDT"
 
         feed._open = fake_open
         events = []
@@ -63,6 +78,10 @@ class LiveFeedTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(events[0]["type"], "warmup")
         self.assertEqual(len(events[0]["candles"]), 1)
+        self.assertEqual(events[0]["candles"][0]["delta"], 4.0)
+        indicator_event = next(e for e in events if e["type"] == "indicator_history")
+        self.assertEqual([point["value"] for point in indicator_event["oi"]], [100.0, 110.0])
+        self.assertEqual(exchange.oi_timeframe, "5m")
         self.assertEqual(exchange.history_limit, 501)
         self.assertEqual(exchange.history_timeframe, "1m")
         self.assertEqual(exchange.history_params, {"paginate": True})
@@ -89,6 +108,7 @@ class LiveNormalizationTests(unittest.TestCase):
         self.assertEqual(LiveFeed("binance", "BTC/USDT", 99_999).history_limit, 3000)
         self.assertEqual(LiveFeed("binance", "BTC/USDT", 0).history_limit, 0)
         self.assertEqual(LiveFeed("binance", "BTC/USDT", "bad").history_limit, 500)
+        self.assertEqual(LiveFeed("binance", "BTC/USDT", 10).history_limit, 80)
 
     def test_timeframe_is_validated(self):
         self.assertEqual(LiveFeed("binance", "BTC/USDT", timeframe="15m").timeframe, "15m")

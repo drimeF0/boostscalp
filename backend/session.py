@@ -232,7 +232,13 @@ class Session:
                         self.state.candles.append(c)
                     if ev["candles"]:
                         self.state.last_price = ev["candles"][-1]["close"]
+                        self._update_taker_ratio(ev["candles"][-1])
                     self.send({"type": "history", "candles": self.state.candle_history(MAX_CANDLES)})
+                elif et == "indicator_history":
+                    for point in ev.get("oi", []):
+                        self.state.deriv.on_oi(point["ts"], point["value"])
+                    self.send({"type": "indicator_history",
+                               "delta": ev.get("delta", []), "oi": ev.get("oi", [])})
                 elif et == "candle":
                     # реальная закрытая свеча из файла — правим объём последней
                     if self.state.candles:
@@ -266,8 +272,20 @@ class Session:
         self.state.on_tick(price, qty, ts, ev.get("side"))
         self.broker.on_tick(ts, price)
         cur = self.state.builder.current
+        self._update_taker_ratio(cur)
         self.send({"type": "tick", "ts": ts, "price": price,
                    "candle": cur})
+
+    def _update_taker_ratio(self, candle: Optional[dict]):
+        """Восстанавливает taker buy/sell ratio из volume и delta."""
+        if not candle:
+            return
+        volume = float(candle.get("volume") or 0.0)
+        delta = max(-volume, min(volume, float(candle.get("delta") or 0.0)))
+        sell_volume = (volume - delta) / 2
+        buy_volume = (volume + delta) / 2
+        if sell_volume > 0:
+            self.state.deriv.taker_ls_ratio = buy_volume / sell_volume
 
     # ==================== ордера + мета-модель ====================
 

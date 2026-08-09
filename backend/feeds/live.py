@@ -23,6 +23,7 @@ FUNDING_POLL_SEC = 60
 BOOK_LEVELS = 25
 DEFAULT_HISTORY_LIMIT = 500
 MAX_HISTORY_LIMIT = 3000
+FEATURE_HISTORY_BARS = 80
 TIMEFRAME_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900,
                      "30m": 1800, "1h": 3600, "4h": 14400}
 
@@ -41,11 +42,13 @@ class LiveFeed:
             history_limit = int(history_limit)
         except (TypeError, ValueError):
             history_limit = DEFAULT_HISTORY_LIMIT
-        self.history_limit = max(0, min(history_limit, MAX_HISTORY_LIMIT))
+        self.history_limit = (0 if history_limit <= 0 else
+                              max(FEATURE_HISTORY_BARS, min(history_limit, MAX_HISTORY_LIMIT)))
         self.timeframe = timeframe if timeframe in TIMEFRAME_SECONDS else "1m"
         self._stop = False
         self.exchange = None
         self.tick_size: float | None = None
+        self.market_id: str | None = None
 
     async def _open(self):
         import ccxt.pro as ccxtpro  # ленивый импорт
@@ -55,10 +58,59 @@ class LiveFeed:
         self.exchange = cls(cfg)
         await self.exchange.load_markets()
         market = self.exchange.market(self.symbol)
+        self.market_id = market.get("id")
         prec = (market.get("precision") or {}).get("price")
         if prec and prec < 1:
             self.tick_size = float(prec)
         log.info("live feed %s %s tick=%s", self.exchange_id, self.symbol, self.tick_size)
+
+    async def _fetch_indicator_history(self) -> dict:
+        """Короткий прогрев Delta/OI: достаточно для 60-bar фич, без загрузки всего графика."""
+        result = {"delta": [], "oi": []}
+        if not self.history_limit:
+            return result
+        interval_ms = TIMEFRAME_SECONDS[self.timeframe] * 1000
+        now = self.exchange.milliseconds()
+
+        # Binance возвращает taker-buy volume в raw klines (поле 9), которое
+        # ccxt OHLCV намеренно отбрасывает. Delta = buy - sell = 2*buy - total.
+        raw_method = getattr(self.exchange, "fapiPublicGetKlines", None)
+        if self.exchange_id == "binance" and raw_method and self.market_id:
+            try:
+                rows = await raw_method({"symbol": self.market_id, "interval": self.timeframe,
+                                         "limit": FEATURE_HISTORY_BARS + 1})
+                current_bucket = now // interval_ms * interval_ms
+                for row in rows or []:
+                    if len(row) < 10 or int(row[0]) >= current_bucket:
+                        continue
+                    total = _non_negative_float(row[5])
+                    taker_buy = _non_negative_float(row[9])
+                    if total is not None and taker_buy is not None:
+                        result["delta"].append({"time": int(row[0]) // 1000,
+                                                "value": 2 * taker_buy - total})
+                result["delta"] = result["delta"][-FEATURE_HISTORY_BARS:]
+            except Exception as e:
+                log.info("delta history unavailable: %s", e)
+
+        oi_method = getattr(self.exchange, "fetch_open_interest_history", None)
+        if oi_method:
+            try:
+                # Большинство derivatives API начинает OI history с 5m.
+                oi_timeframe = "5m" if TIMEFRAME_SECONDS[self.timeframe] < 300 else self.timeframe
+                oi_interval_ms = TIMEFRAME_SECONDS[oi_timeframe]
+                since = now - FEATURE_HISTORY_BARS * oi_interval_ms * 1000
+                rows = await oi_method(self.symbol, oi_timeframe, since, FEATURE_HISTORY_BARS)
+                for row in rows or []:
+                    ts = row.get("timestamp")
+                    value = _positive_float(row.get("openInterestAmount") or
+                                            row.get("openInterestValue"))
+                    if isinstance(ts, (int, float)) and value is not None:
+                        result["oi"].append({"ts": int(ts), "value": value})
+                result["oi"].sort(key=lambda point: point["ts"])
+                result["oi"] = result["oi"][-FEATURE_HISTORY_BARS:]
+            except Exception as e:
+                log.info("OI history unavailable: %s", e)
+        return result
 
     async def stop(self):
         self._stop = True
@@ -168,8 +220,14 @@ class LiveFeed:
                     candles_by_time[candle["time"]] = candle
             candles = [candles_by_time[ts] for ts in sorted(candles_by_time)]
             candles = candles[-self.history_limit:]
+            indicators = await self._fetch_indicator_history()
+            delta_by_time = {point["time"]: point["value"] for point in indicators["delta"]}
+            for candle in candles:
+                candle["delta"] = delta_by_time.get(candle["time"], 0.0)
             if candles:
                 yield {"type": "warmup", "candles": candles}
+                if indicators["oi"]:
+                    yield {"type": "indicator_history", **indicators}
                 yield {"type": "status", "text": f"Загружено свечей истории: {len(candles)}"}
         except Exception as e:
             log.warning("live OHLCV warmup: %s", e)

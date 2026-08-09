@@ -39,10 +39,10 @@
         <option value="1m">1m</option><option value="3m">3m</option><option value="5m">5m</option>
         <option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="4h">4h</option>
       </select>
-      <label class="live-history-control" title="Количество последних закрытых минутных свечей">
+      <label class="live-history-control" title="Количество последних закрытых свечей (минимум 80 для фич модели)">
         <input id="live-history-enabled" type="checkbox" checked>
         История
-        <input id="live-history-limit" type="number" value="500" min="50" max="3000" step="50">
+        <input id="live-history-limit" type="number" value="500" min="80" max="3000" step="20">
       </label>
       <button id="live-connect" class="btn btn-go">Подключить</button>
     </div>
@@ -115,12 +115,13 @@
         <button class="chart-tool drawing-tool active" data-tool="cursor" title="Курсор">↖</button>
         <button class="chart-tool drawing-tool" data-tool="horizontal" title="Горизонтальный уровень">━</button>
         <button class="chart-tool drawing-tool" data-tool="trend" title="Трендовая линия">╱</button>
-        <button class="chart-tool drawing-tool" data-tool="fib" title="Коррекция Фибоначчи">F</button>
+        <button class="chart-tool drawing-tool" data-tool="rectangle" title="Прямоугольник">▭</button>
         <button id="clear-drawings" class="chart-tool" title="Удалить рисунки">⌫</button>
         <span class="panel-meta">Live chart</span>
       </div>
     </div>
     <div id="chart"></div>
+    <svg id="drawing-overlay" aria-label="Объекты рисования"></svg>
   </section>
 
   <div id="dom-resizer" class="splitter splitter-v" title="Изменить ширину стакана"></div>
