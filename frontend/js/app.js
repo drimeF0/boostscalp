@@ -43,7 +43,12 @@ function send(msg) {
 function routeMessage(m) {
   switch (m.type) {
     case "state":        onState(m); break;
-    case "mode":         App.mode = m.mode; break;
+    case "mode":
+      App.mode = m.mode;
+      App.symbol = m.symbol || App.symbol;
+      $("chart-symbol").textContent = App.symbol;
+      document.querySelector(".panel-meta").textContent = m.mode === "backtest" ? "Replay" : "Live chart";
+      break;
     case "history":      Chart.setHistory(m.candles); break;
     case "tick":         onTick(m); break;
     case "book":         App.tickSize = m.tickSize || App.tickSize; Dom.render(m.bids, m.asks); break;
@@ -82,6 +87,7 @@ function onState(m) {
   App.orders = m.orders;
   App.tradesCount = m.tradesCount;
   App.bt = m.bt;
+  $("chart-symbol").textContent = App.symbol;
   renderAccount(); renderPosition(); Tabs.renderOrders(); Tabs.updateCounts();
   renderBtStatus();
   Chart.updateLines();
@@ -240,10 +246,19 @@ document.addEventListener("DOMContentLoaded", () => {
   App.currentSize = App.sizes[0];
   $("cur-size").textContent = "$" + App.currentSize;
 
+  try {
+    const history = JSON.parse(localStorage.getItem("tt_live_history") || "null");
+    if (history) {
+      $("live-history-enabled").checked = history.enabled !== false;
+      $("live-history-limit").value = Math.max(50, Math.min(3000, Number(history.limit) || 500));
+    }
+  } catch (e) {}
+
   Chart.init();
   Dom.init();
   Tabs.init();
   Hotkeys.init();
+  Layout.init();
   initToolbar();
   wsConnect();
 });
@@ -253,8 +268,21 @@ function initToolbar() {
   $("mode-live").onclick = () => switchModeUi("live");
   $("mode-bt").onclick = () => switchModeUi("backtest");
   $("live-connect").onclick = () => {
-    send({ type: "start_live", exchange: $("live-exchange").value, symbol: normSymbol($("live-symbol").value) });
+    const historyEnabled = $("live-history-enabled").checked;
+    const historyLimit = Math.max(50, Math.min(3000, parseInt($("live-history-limit").value, 10) || 500));
+    $("live-history-limit").value = historyLimit;
+    localStorage.setItem("tt_live_history", JSON.stringify({ enabled: historyEnabled, limit: historyLimit }));
+    send({
+      type: "start_live",
+      exchange: $("live-exchange").value,
+      symbol: normSymbol($("live-symbol").value),
+      historyLimit: historyEnabled ? historyLimit : 0,
+    });
   };
+  $("live-history-enabled").onchange = () => {
+    $("live-history-limit").disabled = !$("live-history-enabled").checked;
+  };
+  $("live-history-limit").disabled = !$("live-history-enabled").checked;
   // бэктест
   $("bt-start-btn").onclick = () => {
     send({

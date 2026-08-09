@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from typing import AsyncGenerator
 
 log = logging.getLogger("live")
@@ -19,6 +20,9 @@ EXCHANGE_MAP = {
 
 OI_POLL_SEC = 15
 FUNDING_POLL_SEC = 60
+BOOK_LEVELS = 25
+DEFAULT_HISTORY_LIMIT = 500
+MAX_HISTORY_LIMIT = 3000
 
 
 def to_swap_symbol(symbol: str) -> str:
@@ -27,9 +31,15 @@ def to_swap_symbol(symbol: str) -> str:
 
 
 class LiveFeed:
-    def __init__(self, exchange_id: str, symbol: str):
+    def __init__(self, exchange_id: str, symbol: str,
+                 history_limit: int = DEFAULT_HISTORY_LIMIT):
         self.exchange_id = exchange_id
         self.symbol = to_swap_symbol(symbol)
+        try:
+            history_limit = int(history_limit)
+        except (TypeError, ValueError):
+            history_limit = DEFAULT_HISTORY_LIMIT
+        self.history_limit = max(0, min(history_limit, MAX_HISTORY_LIMIT))
         self._stop = False
         self.exchange = None
         self.tick_size: float | None = None
@@ -64,11 +74,17 @@ class LiveFeed:
                 try:
                     trades = await self.exchange.watch_trades(self.symbol)
                     for t in trades:
+                        price = _positive_float(t.get("price"))
+                        qty = _non_negative_float(t.get("amount"))
+                        ts = t.get("timestamp") or self.exchange.milliseconds()
+                        if price is None or qty is None or not isinstance(ts, (int, float)):
+                            log.warning("ignored malformed trade: %r", t)
+                            continue
                         _put(queue, {
                             "type": "tick",
-                            "ts": t.get("timestamp") or self.exchange.milliseconds(),
-                            "price": float(t["price"]),
-                            "qty": float(t.get("amount") or 0.0),
+                            "ts": int(ts),
+                            "price": price,
+                            "qty": qty,
                         })
                 except Exception as e:
                     if not self._stop:
@@ -78,9 +94,12 @@ class LiveFeed:
         async def book_loop():
             while not self._stop:
                 try:
-                    ob = await self.exchange.watch_order_book(self.symbol, 25)
-                    bids = [[float(p), float(q)] for p, q in (ob.get("bids") or [])[:25]]
-                    asks = [[float(p), float(q)] for p, q in (ob.get("asks") or [])[:25]]
+                    # Не передаём 25 в API: у Binance допустимы только
+                    # 5/10/20/50/100/500/1000. ccxt выберет поддерживаемую
+                    # глубину, а до нужного размера обрежем уже локально.
+                    ob = await self.exchange.watch_order_book(self.symbol)
+                    bids = _clean_book_side(ob.get("bids"), BOOK_LEVELS, reverse=True)
+                    asks = _clean_book_side(ob.get("asks"), BOOK_LEVELS, reverse=False)
                     if bids and asks:
                         _put(queue, {"type": "book", "bids": bids, "asks": asks})
                 except Exception as e:
@@ -116,8 +135,36 @@ class LiveFeed:
         try:
             await self._open()
         except Exception as e:
+            await self.stop()
             yield {"type": "error", "text": f"Не удалось подключиться к {self.exchange_id}: {e}"}
             return
+
+        # Даём графику контекст сразу после подключения. Текущую незакрытую
+        # минуту не включаем: она будет собрана из live-сделок.
+        try:
+            rows = []
+            if self.history_limit:
+                # paginate=True позволяет ccxt разбить запрос, когда значение
+                # больше лимита одной REST-страницы конкретной биржи.
+                rows = await self.exchange.fetch_ohlcv(
+                    # +1 компенсирует текущую незакрытую свечу, которую ниже
+                    # намеренно отбрасываем.
+                    self.symbol, "1m", limit=self.history_limit + 1,
+                    params={"paginate": True},
+                )
+            current_minute_ms = self.exchange.milliseconds() // 60_000 * 60_000
+            candles_by_time = {}
+            for row in rows or []:
+                candle = _clean_ohlcv(row, current_minute_ms)
+                if candle is not None:
+                    candles_by_time[candle["time"]] = candle
+            candles = [candles_by_time[ts] for ts in sorted(candles_by_time)]
+            candles = candles[-self.history_limit:]
+            if candles:
+                yield {"type": "warmup", "candles": candles}
+                yield {"type": "status", "text": f"Загружено свечей истории: {len(candles)}"}
+        except Exception as e:
+            log.warning("live OHLCV warmup: %s", e)
 
         tasks = [asyncio.create_task(trades_loop()), asyncio.create_task(book_loop()),
                  asyncio.create_task(oi_loop()), asyncio.create_task(funding_loop())]
@@ -146,3 +193,52 @@ def _put(q: asyncio.Queue, item: dict):
             q.put_nowait(item)
         except asyncio.QueueFull:
             pass
+
+
+def _positive_float(value) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) and result > 0 else None
+
+
+def _non_negative_float(value) -> float | None:
+    try:
+        result = float(value or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) and result >= 0 else None
+
+
+def _clean_book_side(levels, limit: int, reverse: bool) -> list[list[float]]:
+    clean = []
+    for level in levels or []:
+        if not isinstance(level, (list, tuple)) or len(level) < 2:
+            continue
+        price = _positive_float(level[0])
+        qty = _positive_float(level[1])
+        if price is not None and qty is not None:
+            clean.append([price, qty])
+    clean.sort(key=lambda level: level[0], reverse=reverse)
+    return clean[:limit]
+
+
+def _clean_ohlcv(row, current_minute_ms: int) -> dict | None:
+    if not isinstance(row, (list, tuple)) or len(row) < 6:
+        return None
+    try:
+        ts = int(row[0])
+        values = [float(value) for value in row[1:6]]
+    except (TypeError, ValueError):
+        return None
+    open_, high, low, close, volume = values
+    if (ts >= current_minute_ms or any(not math.isfinite(v) for v in values)
+            or min(open_, high, low, close) <= 0 or volume < 0
+            or high < max(open_, low, close) or low > min(open_, high, close)):
+        return None
+    return {
+        "time": ts // 1000,
+        "open": open_, "high": high, "low": low, "close": close,
+        "volume": volume,
+    }

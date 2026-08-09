@@ -29,6 +29,9 @@ class CandleBuilder:
 
     def update(self, price: float, qty: float, ts_ms: int) -> Optional[dict]:
         """Возвращает закрытую свечу (если минута сменилась)."""
+        if (not math.isfinite(price) or price <= 0 or not math.isfinite(qty)
+                or qty < 0 or not isinstance(ts_ms, (int, float)) or ts_ms <= 0):
+            return None
         ts_min = int(ts_ms // 60000) * 60
         closed = None
         if self.current is None or ts_min > self.current["time"]:
@@ -37,12 +40,14 @@ class CandleBuilder:
                 if self.on_candle_close:
                     self.on_candle_close(closed)
             self.current = _new_candle(ts_min, price, qty)
-        else:
+        elif ts_min == self.current["time"]:
             c = self.current
             c["high"] = max(c["high"], price)
             c["low"] = min(c["low"], price)
             c["close"] = price
             c["volume"] += qty
+        # Запоздалые сделки из уже закрытой минуты игнорируем. Иначе они
+        # повреждают OHLC текущей свечи.
         return closed
 
 
@@ -136,6 +141,11 @@ class MarketState:
         self._vv = 0.0
 
     def on_tick(self, price: float, qty: float, ts_ms: int) -> Optional[dict]:
+        if (not math.isfinite(price) or price <= 0 or not math.isfinite(qty)
+                or qty < 0 or not isinstance(ts_ms, (int, float)) or ts_ms <= 0):
+            return None
+        if self.last_ts and ts_ms < self.last_ts:
+            return None
         self.last_price = price
         self.last_ts = ts_ms
         # VWAP по дню

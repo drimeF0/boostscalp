@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import math
 from typing import Optional
 
 from .broker import PaperBroker
@@ -13,7 +14,7 @@ from .config import (DEFAULT_MAKER_FEE, DEFAULT_START_BALANCE,
 from .db import count_trades, fetch_trades, insert_trade
 from .feeds.backtest import BacktestFeed
 from .feeds.live import LiveFeed
-from .market import MarketState
+from .market import MAX_CANDLES, MarketState
 from .ml.features import compute_features
 from .ml.meta import MetaModel
 
@@ -63,7 +64,8 @@ class Session:
         try:
             if t == "start_live":
                 await self.start_live(msg.get("exchange", "binance"),
-                                      msg.get("symbol", "BTC/USDT"))
+                                      msg.get("symbol", "BTC/USDT"),
+                                      msg.get("historyLimit", 500))
             elif t == "start_backtest":
                 await self.start_backtest(msg)
             elif t == "bt_control":
@@ -134,12 +136,13 @@ class Session:
         self.state.reset(symbol, tick)
         self.bt_status.update({"running": False, "paused": False, "pct": 0.0})
 
-    async def start_live(self, exchange: str, symbol: str):
+    async def start_live(self, exchange: str, symbol: str, history_limit: int = 500):
         await self._switch(symbol)
         self.mode = "live"
-        self.feed = LiveFeed(exchange, symbol)
+        self.feed = LiveFeed(exchange, symbol, history_limit=history_limit)
         self.feed_task = asyncio.create_task(self._feed_loop())
-        self.send({"type": "mode", "mode": "live", "exchange": exchange, "symbol": symbol})
+        self.send({"type": "mode", "mode": "live", "exchange": exchange, "symbol": symbol,
+                   "historyLimit": self.feed.history_limit})
         self.notify("info", f"Live: {exchange} {symbol} — подключение...")
 
     async def start_backtest(self, msg: dict):
@@ -210,7 +213,7 @@ class Session:
                         self.state.candles.append(c)
                     if ev["candles"]:
                         self.state.last_price = ev["candles"][-1]["close"]
-                    self.send({"type": "history", "candles": self.state.candle_history(1500)})
+                    self.send({"type": "history", "candles": self.state.candle_history(MAX_CANDLES)})
                 elif et == "candle":
                     # реальная закрытая свеча из файла — правим объём последней
                     if self.state.candles:
@@ -235,11 +238,17 @@ class Session:
 
     def _on_tick(self, ev: dict):
         ts, price, qty = ev["ts"], ev["price"], ev.get("qty", 0.0)
+        if (not isinstance(ts, (int, float)) or ts <= 0
+                or not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0
+                or not isinstance(qty, (int, float)) or not math.isfinite(qty) or qty < 0
+                or (self.state.last_ts and ts < self.state.last_ts)):
+            log.warning("ignored invalid/out-of-order tick: %r", ev)
+            return
         self.state.on_tick(price, qty, ts)
         self.broker.on_tick(ts, price)
         cur = self.state.builder.current
         self.send({"type": "tick", "ts": ts, "price": price,
-                   "candle": cur, "closed": bool(self.state.candles and cur is None)})
+                   "candle": cur})
 
     # ==================== ордера + мета-модель ====================
 
@@ -355,7 +364,7 @@ class Session:
         })
         self.send_model_status()
         if self.state.candles:
-            self.send({"type": "history", "candles": self.state.candle_history(1500)})
+            self.send({"type": "history", "candles": self.state.candle_history(MAX_CANDLES)})
 
     async def close(self):
         await self._stop_feed()

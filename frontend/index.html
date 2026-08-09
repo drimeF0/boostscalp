@@ -14,6 +14,13 @@
   <div class="tb-row">
     <span class="logo">⚡ TradingTrainer</span>
 
+    <div class="tb-group workspace-switches" aria-label="Панели рабочего пространства">
+      <button id="layout-dom" class="tool-btn active" title="Показать/скрыть стакан">▥ Стакан</button>
+      <button id="layout-bottom" class="tool-btn active" title="Показать/скрыть торговую панель">▤ Торговля</button>
+      <button id="layout-focus" class="tool-btn" title="Развернуть график">⛶ График</button>
+      <button id="layout-reset" class="tool-btn subtle" title="Сбросить расположение">↺</button>
+    </div>
+
     <div class="tb-group">
       <button id="mode-live" class="mode-btn active">Live</button>
       <button id="mode-bt" class="mode-btn">Бэктест</button>
@@ -28,6 +35,11 @@
         <option value="kucoin">KuCoin</option>
       </select>
       <input id="live-symbol" value="BTC/USDT" spellcheck="false">
+      <label class="live-history-control" title="Количество последних закрытых минутных свечей">
+        <input id="live-history-enabled" type="checkbox" checked>
+        История
+        <input id="live-history-limit" type="number" value="500" min="50" max="3000" step="50">
+      </label>
       <button id="live-connect" class="btn btn-go">Подключить</button>
     </div>
 
@@ -46,7 +58,7 @@
       <button id="bt-stop-btn" class="btn hidden">⏹</button>
     </div>
 
-    <div class="tb-group" id="bt-progress-wrap" class="hidden">
+    <div class="tb-group hidden" id="bt-progress-wrap">
       <div id="bt-progress"><div id="bt-progress-bar"></div></div>
       <span id="bt-time"></span>
     </div>
@@ -80,17 +92,25 @@
       <span id="meta-status" class="model-off">не обучена</span>
     </div>
     <div class="tb-spacer"></div>
-    <div class="tb-group hint">
-      B — купить · S — продать · X — закрыть позицию · C — отменить ордера · T (удерживать) + ПКМ — стоп/тейк, + ЛКМ — отмена
+    <div class="tb-group hint" id="hotkey-hint">
+      B — купить · S — продать · X — закрыть · C — отменить · T — стоп/тейк
     </div>
   </div>
 </div>
 
 <!-- ============ ОСНОВНАЯ ОБЛАСТЬ ============ -->
 <div id="main">
-  <div id="chart-wrap"><div id="chart"></div></div>
+  <section id="chart-wrap" class="workspace-panel">
+    <div class="panel-titlebar">
+      <span><i class="status-dot"></i><b id="chart-symbol">BTC/USDT</b> · 1m</span>
+      <span class="panel-meta">Live chart</span>
+    </div>
+    <div id="chart"></div>
+  </section>
 
-  <div id="dom-panel">
+  <div id="dom-resizer" class="splitter splitter-v" title="Изменить ширину стакана"></div>
+
+  <section id="dom-panel" class="workspace-panel">
     <div id="dom-header">
       <span>Стакан</span>
       <label>Сжатие
@@ -112,11 +132,12 @@
       <div id="dom-bids"></div>
     </div>
     <div id="dom-hint">ЛКМ бид — лимит buy · ЛКМ аск — market buy<br>ПКМ аск — лимит sell · ПКМ бид — market sell</div>
-  </div>
+  </section>
 </div>
 
 <!-- ============ НИЖНИЕ ВКЛАДКИ ============ -->
-<div id="bottom">
+<div id="bottom-resizer" class="splitter splitter-h" title="Изменить высоту торговой панели"></div>
+<section id="bottom" class="workspace-panel">
   <div id="tabs">
     <button class="tab active" data-tab="position">Позиция</button>
     <button class="tab" data-tab="orders">Ордера <span id="orders-count" class="cnt hidden"></span></button>
@@ -181,15 +202,13 @@
         <button id="apply-settings" class="btn">Применить комиссии</button>
         <button id="reset-account" class="btn btn-danger">Сбросить счёт</button>
         <h4>Горячие клавиши</h4>
-        <div class="dim hotkeys-list">
-          1–9 — выбор объёма · B/S — market buy/sell · X — закрыть позицию · C — отменить все лимитки<br>
-          T (удерживать) + ПКМ по стакану/графику — установить стоп или тейк (определяется автоматически)<br>
-          T + ЛКМ — отменить стоп/тейк · Пробел — пауза/продолжить бэктест
-        </div>
+        <p class="dim hotkeys-help">Нажмите на поле, затем нужную клавишу. Цифры 1–9 зарезервированы для объёмов.</p>
+        <div id="hotkey-inputs"></div>
+        <button id="reset-hotkeys" class="btn">Сбросить клавиши</button>
       </div>
     </div>
   </div>
-</div>
+</section>
 
 <div id="toasts"></div>
 
@@ -198,5 +217,6 @@
 <script src="js/dom.js"></script>
 <script src="js/tabs.js"></script>
 <script src="js/hotkeys.js"></script>
+<script src="js/layout.js"></script>
 </body>
 </html>
