@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import math
 from typing import Callable, Dict, List, Optional
 
 from .market import MarketState
@@ -191,6 +192,8 @@ class PaperBroker:
     def place_market(self, side: str, qty: float, ts: int,
                      features: Optional[dict] = None) -> dict:
         price = self._exec_price(side)
+        if (not math.isfinite(qty) or qty <= 0 or not math.isfinite(price) or price <= 0):
+            raise ValueError("Нет корректной рыночной цены для исполнения")
         oid = next(self._oid)
         self._fill(side, qty, price, ts, self.taker_fee, features, oid)
         return {"id": oid, "price": price, "status": "filled"}
@@ -220,12 +223,12 @@ class PaperBroker:
         self.orders.clear()
         self.emit("orders", self.orders_list())
 
-    def close_position(self, ts: int):
+    def close_position(self, ts: int) -> Optional[dict]:
         p = self.position
-        if p.qty == 0:
-            return
+        if not math.isfinite(p.qty) or abs(p.qty) < 1e-12:
+            return None
         side = "sell" if p.qty > 0 else "buy"
-        self.place_market(side, abs(p.qty), ts)
+        return self.place_market(side, abs(p.qty), ts)
 
     # -------------------- стоп / тейк --------------------
 

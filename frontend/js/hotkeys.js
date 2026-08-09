@@ -107,7 +107,7 @@ Hotkeys.init = function () {
     if (!action) return;
     if (action === "buy") sendOrder("buy", "market");
     if (action === "sell") sendOrder("sell", "market");
-    if (action === "close") send({ type: "close_position" });
+    if (action === "close") closePosition();
     if (action === "cancel") {
       send({ type: "cancel_all" });
       toast("info", "Все лимитные ордера отменены");

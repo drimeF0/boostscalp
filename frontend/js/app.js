@@ -18,6 +18,7 @@ const App = {
   meta: { enabled: false, mode: "filter", threshold: 0.5, trained: false },
   bt: { running: false, paused: false, pct: 0, speed: 5, ts: null },
   slTpArmed: false,         // удерживается клавиша T
+  closePending: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -37,7 +38,12 @@ function wsConnect() {
 }
 
 function send(msg) {
-  if (App.ws && App.ws.readyState === 1) App.ws.send(JSON.stringify(msg));
+  if (App.ws && App.ws.readyState === WebSocket.OPEN) {
+    App.ws.send(JSON.stringify(msg));
+    return true;
+  }
+  toast("error", "Команда не отправлена: нет соединения с сервером");
+  return false;
 }
 
 function routeMessage(m) {
@@ -53,7 +59,11 @@ function routeMessage(m) {
     case "tick":         onTick(m); break;
     case "book":         App.tickSize = m.tickSize || App.tickSize; Dom.render(m.bids, m.asks); break;
     case "fill":         onFill(m.data); break;
-    case "position":     App.position = m.data; renderPosition(); Chart.updateLines(); break;
+    case "position":
+      App.position = m.data;
+      if (!m.data.qty) App.closePending = false;
+      renderPosition(); Chart.updateLines();
+      break;
     case "account":      App.account = m.data; renderAccount(); break;
     case "orders":       App.orders = m.data; Tabs.renderOrders(); Chart.updateLines(); break;
     case "trade_closed": onTradeClosed(m.trade); break;
@@ -84,6 +94,7 @@ function onState(m) {
   App.symbol = m.symbol;
   App.account = m.account;
   App.position = m.position;
+  App.closePending = false;
   App.orders = m.orders;
   App.tradesCount = m.tradesCount;
   App.bt = m.bt;
@@ -210,6 +221,22 @@ function renderBtStatus() {
 
 function sendOrder(side, orderType, price) {
   send({ type: "order", side, orderType, price: price || null, sizeUsd: App.currentSize });
+}
+
+function closePosition() {
+  if (!App.position || !App.position.qty) {
+    toast("warn", "Нет открытой позиции");
+    return;
+  }
+  if (App.closePending) return;
+  App.closePending = send({ type: "close_position" });
+  if (App.closePending) {
+    renderPosition();
+    // Не блокируем кнопку навсегда, если ответ потерялся.
+    setTimeout(() => {
+      if (App.closePending) { App.closePending = false; renderPosition(); }
+    }, 5000);
+  }
 }
 
 function sendMetaSettings() {

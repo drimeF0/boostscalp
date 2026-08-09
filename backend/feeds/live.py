@@ -78,7 +78,10 @@ class LiveFeed:
                         qty = _non_negative_float(t.get("amount"))
                         ts = t.get("timestamp") or self.exchange.milliseconds()
                         if price is None or qty is None or not isinstance(ts, (int, float)):
-                            log.warning("ignored malformed trade: %r", t)
+                            # Binance изредка присылает служебные trade-события
+                            # p=0/q=0. Это не ошибка потока и не должно пугать
+                            # пользователя в production-логе.
+                            log.debug("ignored empty/malformed trade: %r", t)
                             continue
                         _put(queue, {
                             "type": "tick",

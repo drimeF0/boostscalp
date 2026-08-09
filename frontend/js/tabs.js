@@ -74,8 +74,9 @@ Tabs.renderPosition = function () {
     <td class="${upnl >= 0 ? "pos" : "neg"}">${upnl >= 0 ? "+" : ""}${fmt(upnl)}</td>
     <td>${p.sl ? fmt(p.sl) : "—"}</td>
     <td>${p.tp ? fmt(p.tp) : "—"}</td>
-    <td><button onclick="send({type:'close_position'})">Закрыть</button></td>
+    <td><button id="close-position-btn" ${App.closePending ? "disabled" : ""}>${App.closePending ? "Закрытие…" : "Закрыть"}</button></td>
   </tr>`;
+  document.getElementById("close-position-btn").onclick = closePosition;
 };
 
 /* ---------------- ордера ---------------- */

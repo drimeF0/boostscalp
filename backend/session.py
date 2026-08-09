@@ -77,7 +77,11 @@ class Session:
             elif t == "cancel_all":
                 self.broker.cancel_all()
             elif t == "close_position":
-                self.broker.close_position(self.state.last_ts or _now_ms())
+                result = self.broker.close_position(self.state.last_ts or _now_ms())
+                if result is None:
+                    self.notify("warn", "Нет открытой позиции")
+                else:
+                    self.notify("ok", f"Позиция закрыта @ {result['price']:g}")
             elif t == "set_sl_tp":
                 r = self.broker.set_sl_tp(float(msg.get("price", 0)))
                 if r is None:

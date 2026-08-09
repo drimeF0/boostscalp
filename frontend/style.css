@@ -198,6 +198,7 @@ input:focus, select:focus { border-color: var(--accent); }
 .tbl .empty { color: var(--dim); text-align: center; padding: 14px; }
 .tbl button { background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 3px; cursor: pointer; padding: 1px 8px; }
 .tbl button:hover { color: var(--red); border-color: var(--red); }
+.tbl button:disabled { opacity: .5; cursor: wait; color: var(--dim); border-color: var(--border); }
 
 .model-grid, .settings-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px; }
 .model-grid h4, .settings-grid h4 { margin: 6px 0; color: var(--text); }
