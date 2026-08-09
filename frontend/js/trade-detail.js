@@ -1,7 +1,10 @@
 /* Карточка сделки: графический контекст, CatBoost-фичи и пользовательские теги. */
 "use strict";
 
-const TradeDetail = { chart: null, series: null, trade: null };
+const TradeDetail = {
+  chart: null, series: null, trade: null, requestedTradeId: null,
+  requestSeq: 0, activeRequestId: null,
+};
 
 TradeDetail.settings = function () {
   return {
@@ -31,17 +34,29 @@ TradeDetail.init = function () {
 
 TradeDetail.open = function (tradeId) {
   const settings = TradeDetail.settings();
+  TradeDetail.requestedTradeId = Number(tradeId);
+  TradeDetail.activeRequestId = ++TradeDetail.requestSeq;
+  TradeDetail.trade = null;
   $("trade-detail-modal").classList.remove("hidden");
   $("trade-detail-title").textContent = `Сделка #${tradeId}`;
   $("trade-detail-summary").innerHTML = `<span class="dim">Загрузка…</span>`;
-  send({ type: "get_trade_detail", tradeId, ...settings });
+  $("trade-entry-tags").value = "";
+  $("trade-exit-tags").value = "";
+  $("trade-notes").value = "";
+  $("trade-feature-grid").innerHTML = `<div class="dim">Загрузка…</div>`;
+  TradeDetail.resetChart();
+  send({ type: "get_trade_detail", tradeId, requestId: TradeDetail.activeRequestId, ...settings });
 };
 
 TradeDetail.close = function () {
+  TradeDetail.requestedTradeId = null;
+  TradeDetail.activeRequestId = null;
   $("trade-detail-modal").classList.add("hidden");
 };
 
-TradeDetail.render = function (trade) {
+TradeDetail.render = function (trade, requestId) {
+  // Не показываем запоздавший ответ от ранее открытой строки журнала.
+  if (Number(trade.id) !== TradeDetail.requestedTradeId || requestId !== TradeDetail.activeRequestId) return;
   TradeDetail.trade = trade;
   const sideClass = trade.side === "buy" ? "pos" : "neg";
   $("trade-detail-title").textContent = `${trade.symbol} · сделка #${trade.id}`;
@@ -51,7 +66,9 @@ TradeDetail.render = function (trade) {
     <div><span>Выход</span><b>${fmt(trade.exitPrice, 6)}</b></div>
     <div><span>Количество</span><b>${Number(trade.qty).toFixed(5)}</b></div>
     <div><span>PnL</span><b class="${trade.pnl >= 0 ? "pos" : "neg"}">${trade.pnl >= 0 ? "+" : ""}${fmt(trade.pnl)}</b></div>
-    <div><span>Комиссия</span><b>${fmt(trade.fee)}</b></div>`;
+    <div><span>Комиссия</span><b>${fmt(trade.fee)}</b></div>
+    <div><span>Время входа</span><b>${new Date(trade.entryTs).toLocaleString()}</b></div>
+    <div><span>Время выхода</span><b>${new Date(trade.exitTs).toLocaleString()}</b></div>`;
   $("trade-entry-tags").value = (trade.entryTags || []).join(", ");
   $("trade-exit-tags").value = (trade.exitTags || []).join(", ");
   $("trade-notes").value = trade.notes || "";
@@ -82,10 +99,25 @@ TradeDetail.ensureChart = function () {
   });
 };
 
+TradeDetail.resetChart = function () {
+  if (TradeDetail.chart) {
+    TradeDetail.chart.remove();
+    TradeDetail.chart = null;
+    TradeDetail.series = null;
+  }
+  $("trade-chart-empty").classList.remove("hidden");
+  $("trade-chart-empty").textContent = "Загрузка контекста сделки…";
+  $("trade-context-label").textContent = "";
+};
+
 TradeDetail.renderChart = function (trade) {
   const candles = trade.candles || [];
   const empty = $("trade-chart-empty");
+  // Отдельный экземпляр chart гарантирует отсутствие data/scale/markers
+  // от предыдущей сделки.
+  TradeDetail.resetChart();
   empty.classList.toggle("hidden", candles.length > 0);
+  empty.textContent = "Для этой сделки свечной контекст ещё недоступен";
   $("trade-context-label").textContent = `${candles.length} свечей`;
   if (!candles.length) return;
   TradeDetail.ensureChart();
@@ -111,6 +143,7 @@ TradeDetail.saveTags = function () {
     entryTags: parse($("trade-entry-tags").value),
     exitTags: parse($("trade-exit-tags").value),
     notes: $("trade-notes").value,
+    requestId: TradeDetail.activeRequestId,
     ...TradeDetail.settings(),
   });
 };

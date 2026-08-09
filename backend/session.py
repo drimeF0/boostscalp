@@ -388,7 +388,8 @@ class Session:
         start = trade["entry_ts"] - prefix * 60_000
         end = trade["exit_ts"] + suffix * 60_000
         context = [c for c in context if start <= c["time"] * 1000 <= end]
-        self.send({"type": "trade_detail", "trade": _db_trade_detail(trade, context)})
+        self.send({"type": "trade_detail", "trade": _db_trade_detail(trade, context),
+                   "requestId": msg.get("requestId")})
 
     def update_trade_tags(self, msg: dict):
         trade_id = int(msg.get("tradeId", 0))
@@ -401,7 +402,8 @@ class Session:
         self.notify("ok", "Теги сделки сохранены")
         self.send_trade_detail({"tradeId": trade_id,
                                 "prefixMinutes": msg.get("prefixMinutes", 30),
-                                "suffixMinutes": msg.get("suffixMinutes", 15)})
+                                "suffixMinutes": msg.get("suffixMinutes", 15),
+                                "requestId": msg.get("requestId")})
         self.send({"type": "trades_list",
                    "trades": [_db_trade_public(x) for x in fetch_trades(300)]})
 

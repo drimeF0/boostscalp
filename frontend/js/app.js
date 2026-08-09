@@ -77,7 +77,7 @@ function routeMessage(m) {
     case "notification": toast(m.level, m.text); break;
     case "bt_status":    App.bt = m; renderBtStatus(); break;
     case "deriv":        renderDeriv(m); break;
-    case "trade_detail": TradeDetail.render(m.trade); break;
+    case "trade_detail": TradeDetail.render(m.trade, m.requestId); break;
   }
 }
 

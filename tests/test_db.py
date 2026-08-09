@@ -61,6 +61,27 @@ class TradeDatabaseMigrationTests(unittest.TestCase):
         self.assertEqual(trade["notes"], "по плану")
         self.assertEqual(len(trade["context"]), 1)
 
+    def test_each_trade_keeps_its_own_context(self):
+        db.init_db()
+        base = {
+            "symbol": "TUT/USDT", "side": "buy", "qty": 1,
+            "entryPrice": .02, "exitPrice": .021, "pnl": 1, "fee": .01, "label": 1,
+        }
+        first_id = db.insert_trade({
+            **base, "entryTs": 60_000, "exitTs": 120_000,
+            "context": [{"time": 60, "open": 1, "high": 2, "low": 1, "close": 2, "volume": 1}],
+        })
+        second_id = db.insert_trade({
+            **base, "entryTs": 600_000, "exitTs": 660_000,
+            "context": [{"time": 600, "open": 10, "high": 12, "low": 9, "close": 11, "volume": 2}],
+        })
+
+        first = db.fetch_trade(first_id)
+        second = db.fetch_trade(second_id)
+        self.assertEqual(first["context"][0]["time"], 60)
+        self.assertEqual(second["context"][0]["time"], 600)
+        self.assertNotEqual(first["context"], second["context"])
+
 
 class TradeDetailProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
