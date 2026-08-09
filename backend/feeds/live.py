@@ -23,6 +23,8 @@ FUNDING_POLL_SEC = 60
 BOOK_LEVELS = 25
 DEFAULT_HISTORY_LIMIT = 500
 MAX_HISTORY_LIMIT = 3000
+TIMEFRAME_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900,
+                     "30m": 1800, "1h": 3600, "4h": 14400}
 
 
 def to_swap_symbol(symbol: str) -> str:
@@ -32,7 +34,7 @@ def to_swap_symbol(symbol: str) -> str:
 
 class LiveFeed:
     def __init__(self, exchange_id: str, symbol: str,
-                 history_limit: int = DEFAULT_HISTORY_LIMIT):
+                 history_limit: int = DEFAULT_HISTORY_LIMIT, timeframe: str = "1m"):
         self.exchange_id = exchange_id
         self.symbol = to_swap_symbol(symbol)
         try:
@@ -40,6 +42,7 @@ class LiveFeed:
         except (TypeError, ValueError):
             history_limit = DEFAULT_HISTORY_LIMIT
         self.history_limit = max(0, min(history_limit, MAX_HISTORY_LIMIT))
+        self.timeframe = timeframe if timeframe in TIMEFRAME_SECONDS else "1m"
         self._stop = False
         self.exchange = None
         self.tick_size: float | None = None
@@ -88,6 +91,7 @@ class LiveFeed:
                             "ts": int(ts),
                             "price": price,
                             "qty": qty,
+                            "side": t.get("side") if t.get("side") in ("buy", "sell") else None,
                         })
                 except Exception as e:
                     if not self._stop:
@@ -152,10 +156,11 @@ class LiveFeed:
                 rows = await self.exchange.fetch_ohlcv(
                     # +1 компенсирует текущую незакрытую свечу, которую ниже
                     # намеренно отбрасываем.
-                    self.symbol, "1m", limit=self.history_limit + 1,
+                    self.symbol, self.timeframe, limit=self.history_limit + 1,
                     params={"paginate": True},
                 )
-            current_minute_ms = self.exchange.milliseconds() // 60_000 * 60_000
+            interval_ms = TIMEFRAME_SECONDS[self.timeframe] * 1000
+            current_minute_ms = self.exchange.milliseconds() // interval_ms * interval_ms
             candles_by_time = {}
             for row in rows or []:
                 candle = _clean_ohlcv(row, current_minute_ms)

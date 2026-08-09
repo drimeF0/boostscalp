@@ -35,6 +35,10 @@
         <option value="kucoin">KuCoin</option>
       </select>
       <input id="live-symbol" value="BTC/USDT" spellcheck="false">
+      <select id="live-timeframe" title="Таймфрейм live-графика">
+        <option value="1m">1m</option><option value="3m">3m</option><option value="5m">5m</option>
+        <option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="4h">4h</option>
+      </select>
       <label class="live-history-control" title="Количество последних закрытых минутных свечей">
         <input id="live-history-enabled" type="checkbox" checked>
         История
@@ -102,8 +106,19 @@
 <div id="main">
   <section id="chart-wrap" class="workspace-panel">
     <div class="panel-titlebar">
-      <span><i class="status-dot"></i><b id="chart-symbol">BTC/USDT</b> · 1m</span>
-      <span class="panel-meta">Live chart</span>
+      <span><i class="status-dot"></i><b id="chart-symbol">BTC/USDT</b> · <b id="chart-timeframe">1m</b></span>
+      <div class="chart-tools">
+        <button class="chart-tool indicator-toggle active" data-indicator="volume" title="Объём">VOL</button>
+        <button class="chart-tool indicator-toggle" data-indicator="delta" title="Дельта рыночных покупок/продаж">Δ</button>
+        <button class="chart-tool indicator-toggle" data-indicator="oi" title="Открытый интерес">OI</button>
+        <span class="tool-separator"></span>
+        <button class="chart-tool drawing-tool active" data-tool="cursor" title="Курсор">↖</button>
+        <button class="chart-tool drawing-tool" data-tool="horizontal" title="Горизонтальный уровень">━</button>
+        <button class="chart-tool drawing-tool" data-tool="trend" title="Трендовая линия">╱</button>
+        <button class="chart-tool drawing-tool" data-tool="fib" title="Коррекция Фибоначчи">F</button>
+        <button id="clear-drawings" class="chart-tool" title="Удалить рисунки">⌫</button>
+        <span class="panel-meta">Live chart</span>
+      </div>
     </div>
     <div id="chart"></div>
   </section>
@@ -162,8 +177,8 @@
 
   <div class="tab-panel hidden" id="tab-trades">
     <table class="tbl" id="trades-table">
-      <thead><tr><th>#</th><th>Символ</th><th>Сторона</th><th>Вход</th><th>Выход</th><th>PnL</th><th>Метка</th><th>Время</th></tr></thead>
-      <tbody><tr><td colspan="8" class="empty">Сделок пока нет</td></tr></tbody>
+      <thead><tr><th>#</th><th>Символ</th><th>Сторона</th><th>Вход</th><th>Выход</th><th>PnL</th><th>Метка</th><th>Теги</th><th>Время</th></tr></thead>
+      <tbody><tr><td colspan="9" class="empty">Сделок пока нет</td></tr></tbody>
     </table>
   </div>
 
@@ -193,6 +208,10 @@
         <h4>Объёмы по горячим клавишам (USD)</h4>
         <div id="size-inputs"></div>
         <button id="save-sizes" class="btn">Сохранить объёмы</button>
+        <h4>Контекст карточки сделки</h4>
+        <label>До входа, минут <input id="trade-prefix" type="number" value="30" min="0" max="240" class="w70"></label>
+        <label>После выхода, минут <input id="trade-suffix" type="number" value="15" min="0" max="240" class="w70"></label>
+        <button id="save-trade-context" class="btn">Сохранить контекст</button>
       </div>
       <div>
         <h4>Счёт и комиссии</h4>
@@ -210,6 +229,45 @@
   </div>
 </section>
 
+<!-- ============ КАРТОЧКА СДЕЛКИ ============ -->
+<div id="trade-detail-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="trade-detail-title">
+  <div class="modal-backdrop" data-close-detail></div>
+  <section class="trade-detail-window">
+    <header class="trade-detail-header">
+      <div>
+        <span class="eyebrow">Журнал сделки</span>
+        <h2 id="trade-detail-title">Сделка</h2>
+      </div>
+      <button class="icon-btn" data-close-detail aria-label="Закрыть">✕</button>
+    </header>
+    <div id="trade-detail-summary" class="trade-detail-summary"></div>
+    <div class="trade-detail-grid">
+      <section class="detail-card trade-chart-card">
+        <div class="detail-card-title"><span>Контекст цены</span><span id="trade-context-label" class="dim"></span></div>
+        <div id="trade-detail-chart"></div>
+        <div id="trade-chart-empty" class="empty-overlay hidden">Для этой сделки свечной контекст ещё недоступен</div>
+      </section>
+      <section class="detail-card trade-tags-card">
+        <div class="detail-card-title">Разбор сделки</div>
+        <label>Причина входа
+          <input id="trade-entry-tags" placeholder="пробой, импульс, уровень">
+        </label>
+        <label>Причина выхода
+          <input id="trade-exit-tags" placeholder="тейк, стоп, ручной выход">
+        </label>
+        <label>Комментарий
+          <textarea id="trade-notes" rows="5" placeholder="Что сработало и что улучшить"></textarea>
+        </label>
+        <button id="save-trade-tags" class="btn btn-go">Сохранить разбор</button>
+      </section>
+      <section class="detail-card trade-features-card">
+        <div class="detail-card-title">Фичи CatBoost на входе</div>
+        <div id="trade-feature-grid" class="feature-grid"></div>
+      </section>
+    </div>
+  </section>
+</div>
+
 <div id="toasts"></div>
 
 <script src="js/app.js"></script>
@@ -218,5 +276,6 @@
 <script src="js/tabs.js"></script>
 <script src="js/hotkeys.js"></script>
 <script src="js/layout.js"></script>
+<script src="js/trade-detail.js"></script>
 </body>
 </html>

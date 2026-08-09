@@ -39,15 +39,26 @@ def init_db():
             """
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_trades_exit ON trades(exit_ts)")
+        # Неблокирующая миграция существующих баз.
+        columns = {row[1] for row in c.execute("PRAGMA table_info(trades)")}
+        migrations = {
+            "context": "TEXT NOT NULL DEFAULT '[]'",
+            "entry_tags": "TEXT NOT NULL DEFAULT '[]'",
+            "exit_tags": "TEXT NOT NULL DEFAULT '[]'",
+            "notes": "TEXT NOT NULL DEFAULT ''",
+        }
+        for name, ddl in migrations.items():
+            if name not in columns:
+                c.execute(f"ALTER TABLE trades ADD COLUMN {name} {ddl}")
 
 
-def insert_trade(trade: dict, mode: str = ""):
+def insert_trade(trade: dict, mode: str = "") -> int:
     with _lock, _conn() as c:
-        c.execute(
+        cursor = c.execute(
             """INSERT INTO trades
                (symbol, side, qty, entry_price, exit_price, entry_ts, exit_ts,
-                pnl, fee, mode, features, label)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                pnl, fee, mode, features, label, context, entry_tags, exit_tags, notes)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 trade.get("symbol", ""),
                 trade.get("side", ""),
@@ -61,8 +72,13 @@ def insert_trade(trade: dict, mode: str = ""):
                 mode,
                 json.dumps(trade.get("features") or {}),
                 int(trade.get("label", 0)),
+                json.dumps(trade.get("context") or []),
+                json.dumps(trade.get("entryTags") or []),
+                json.dumps(trade.get("exitTags") or []),
+                str(trade.get("notes") or ""),
             ),
         )
+        return int(cursor.lastrowid)
 
 
 def fetch_trades(limit: int = 500) -> List[dict]:
@@ -79,6 +95,36 @@ def fetch_trades(limit: int = 500) -> List[dict]:
             d["features"] = {}
         out.append(d)
     return out
+
+
+def fetch_trade(trade_id: int) -> Optional[dict]:
+    with _lock, _conn() as c:
+        row = c.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchone()
+    if row is None:
+        return None
+    result = dict(row)
+    for key, fallback in (("features", {}), ("context", []),
+                          ("entry_tags", []), ("exit_tags", [])):
+        try:
+            result[key] = json.loads(result.get(key) or json.dumps(fallback))
+        except (TypeError, json.JSONDecodeError):
+            result[key] = fallback
+    return result
+
+
+def update_trade_tags(trade_id: int, entry_tags: List[str], exit_tags: List[str],
+                      notes: str = "") -> bool:
+    with _lock, _conn() as c:
+        cursor = c.execute(
+            "UPDATE trades SET entry_tags=?, exit_tags=?, notes=? WHERE id=?",
+            (json.dumps(entry_tags), json.dumps(exit_tags), notes, trade_id),
+        )
+        return cursor.rowcount > 0
+
+
+def update_trade_context(trade_id: int, candles: List[dict]) -> None:
+    with _lock, _conn() as c:
+        c.execute("UPDATE trades SET context=? WHERE id=?", (json.dumps(candles), trade_id))
 
 
 def count_trades() -> int:

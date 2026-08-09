@@ -5,9 +5,15 @@ const Chart = {
   chart: null,
   candleSeries: null,
   volSeries: null,
+  deltaSeries: null,
+  oiSeries: null,
   priceLines: [],
   markers: [],
   lastCandleTime: 0,
+  drawingTool: "cursor",
+  drawingStart: null,
+  drawings: [],
+  indicators: { volume: true, delta: false, oi: false },
 };
 
 Chart.init = function () {
@@ -38,18 +44,40 @@ Chart.init = function () {
     priceScaleId: "",
   });
   Chart.chart.priceScale("").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+  Chart.deltaSeries = Chart.chart.addHistogramSeries({
+    priceScaleId: "delta", visible: false,
+    priceFormat: { type: "volume" },
+  });
+  Chart.chart.priceScale("delta").applyOptions({
+    scaleMargins: { top: 0.70, bottom: 0.16 }, borderVisible: false,
+  });
+  Chart.oiSeries = Chart.chart.addLineSeries({
+    priceScaleId: "oi", visible: false, color: "#b56cff", lineWidth: 2,
+    priceFormat: { type: "volume" }, lastValueVisible: true, priceLineVisible: false,
+  });
+  Chart.chart.priceScale("oi").applyOptions({
+    scaleMargins: { top: 0.56, bottom: 0.31 }, borderVisible: false,
+  });
 
   // клик по графику с зажатым T — установка стоп/тейк
   Chart.chart.subscribeClick((param) => {
+    if (Chart.drawingTool !== "cursor" && param.point && param.time != null) {
+      const price = Chart.candleSeries.coordinateToPrice(param.point.y);
+      if (price != null) Chart.onDrawingClick(param.time, price);
+      return;
+    }
     if (!App.slTpArmed || !param.point) return;
     const price = Chart.candleSeries.coordinateToPrice(param.point.y);
     if (price == null) return;
     send({ type: "set_sl_tp", price });
   });
+  Chart.initTools();
 };
 
 Chart.setHistory = function (candles) {
   if (!Chart.candleSeries) return;
+  Chart.clearDrawings(true);
+  Chart.oiSeries.setData([]);
   const data = candles.map((c) => ({
     time: c.time, open: c.open, high: c.high, low: c.low, close: c.close,
   }));
@@ -57,8 +85,13 @@ Chart.setHistory = function (candles) {
     time: c.time, value: c.volume,
     color: c.close >= c.open ? "rgba(38,166,154,.4)" : "rgba(239,83,80,.4)",
   }));
+  const deltas = candles.map((c) => ({
+    time: c.time, value: c.delta || 0,
+    color: (c.delta || 0) >= 0 ? "rgba(32,180,134,.7)" : "rgba(240,82,82,.7)",
+  }));
   Chart.candleSeries.setData(data);
   Chart.volSeries.setData(vols);
+  Chart.deltaSeries.setData(deltas);
   Chart.markers = [];
   Chart.candleSeries.setMarkers([]);
   Chart.lastCandleTime = candles.length ? candles[candles.length - 1].time : 0;
@@ -73,7 +106,87 @@ Chart.updateCandle = function (c) {
     time: c.time, value: c.volume,
     color: c.close >= c.open ? "rgba(38,166,154,.4)" : "rgba(239,83,80,.4)",
   });
+  Chart.deltaSeries.update({
+    time: c.time, value: c.delta || 0,
+    color: (c.delta || 0) >= 0 ? "rgba(32,180,134,.7)" : "rgba(240,82,82,.7)",
+  });
   Chart.lastCandleTime = c.time;
+};
+
+Chart.updateOi = function (m) {
+  if (!Chart.oiSeries || !m.oi || !m.ts) return;
+  const interval = ({ "1m": 60, "3m": 180, "5m": 300, "15m": 900,
+    "30m": 1800, "1h": 3600, "4h": 14400 })[App.timeframe] || 60;
+  const time = Math.floor(m.ts / 1000 / interval) * interval;
+  Chart.oiSeries.update({ time, value: m.oi });
+};
+
+Chart.initTools = function () {
+  document.querySelectorAll(".indicator-toggle").forEach((button) => {
+    button.onclick = () => {
+      const name = button.dataset.indicator;
+      Chart.indicators[name] = !Chart.indicators[name];
+      button.classList.toggle("active", Chart.indicators[name]);
+      if (name === "volume") Chart.volSeries.applyOptions({ visible: Chart.indicators[name] });
+      if (name === "delta") Chart.deltaSeries.applyOptions({ visible: Chart.indicators[name] });
+      if (name === "oi") Chart.oiSeries.applyOptions({ visible: Chart.indicators[name] });
+    };
+  });
+  document.querySelectorAll(".drawing-tool").forEach((button) => {
+    button.onclick = () => {
+      Chart.drawingTool = button.dataset.tool;
+      Chart.drawingStart = null;
+      document.querySelectorAll(".drawing-tool").forEach((b) => b.classList.toggle("active", b === button));
+      document.getElementById("chart").style.cursor = Chart.drawingTool === "cursor" ? "" : "crosshair";
+    };
+  });
+  document.getElementById("clear-drawings").onclick = () => Chart.clearDrawings(false);
+};
+
+Chart.onDrawingClick = function (time, price) {
+  if (Chart.drawingTool === "horizontal") {
+    const line = Chart.candleSeries.createPriceLine({
+      price, color: "#f0b90b", lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: "LEVEL",
+    });
+    Chart.drawings.push({ type: "price", line });
+    return;
+  }
+  if (!Chart.drawingStart) {
+    Chart.drawingStart = { time, price };
+    toast("info", "Выберите вторую точку рисунка");
+    return;
+  }
+  const start = Chart.drawingStart;
+  Chart.drawingStart = null;
+  if (Chart.drawingTool === "trend") {
+    const series = Chart.chart.addLineSeries({
+      color: "#4c8dff", lineWidth: 2, lastValueVisible: false, priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    series.setData([{ time: start.time, value: start.price }, { time, value: price }].sort((a, b) => a.time - b.time));
+    Chart.drawings.push({ type: "series", series });
+  } else if (Chart.drawingTool === "fib") {
+    const diff = price - start.price;
+    [0, .236, .382, .5, .618, .786, 1].forEach((level) => {
+      const line = Chart.candleSeries.createPriceLine({
+        price: start.price + diff * level, color: "rgba(181,108,255,.8)", lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: true,
+        title: `F ${level}`,
+      });
+      Chart.drawings.push({ type: "price", line });
+    });
+  }
+};
+
+Chart.clearDrawings = function (silent = false) {
+  Chart.drawings.forEach((drawing) => {
+    if (drawing.type === "price") Chart.candleSeries.removePriceLine(drawing.line);
+    if (drawing.type === "series") Chart.chart.removeSeries(drawing.series);
+  });
+  Chart.drawings = [];
+  Chart.drawingStart = null;
+  if (!silent) toast("info", "Рисунки удалены");
 };
 
 Chart.addMarker = function (fill) {

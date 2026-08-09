@@ -109,7 +109,7 @@ Tabs.renderOrders = function () {
 Tabs.renderTrades = function () {
   const tb = document.querySelector("#trades-table tbody");
   if (!App.trades || !App.trades.length) {
-    tb.innerHTML = `<tr><td colspan="8" class="empty">Сделок пока нет</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="9" class="empty">Сделок пока нет</td></tr>`;
     return;
   }
   tb.innerHTML = "";
@@ -124,10 +124,20 @@ Tabs.renderTrades = function () {
       <td>${fmt(t.exitPrice)}</td>
       <td class="${t.pnl >= 0 ? "pos" : "neg"}">${t.pnl >= 0 ? "+" : ""}${fmt(t.pnl)}</td>
       <td>${t.label ? "✅" : "❌"}</td>
+      <td class="trade-tags">${[...(t.entryTags || []), ...(t.exitTags || [])].map((tag) => `<span>${escapeHtml(tag)}</span>`).join("") || "—"}</td>
       <td>${d.toLocaleString()}</td>`;
+    tr.className = "trade-row";
+    tr.title = "Открыть карточку сделки";
+    tr.onclick = () => TradeDetail.open(t.id);
     tb.appendChild(tr);
   }
 };
+
+function escapeHtml(value) {
+  const el = document.createElement("span");
+  el.textContent = value;
+  return el.innerHTML;
+}
 
 Tabs.updateCounts = function () {
   const oc = document.getElementById("orders-count");

@@ -29,6 +29,16 @@ class CandleBuilderTests(unittest.TestCase):
             {"open": 10, "high": 12, "low": 9, "close": 11, "volume": 4},
         )
 
+    def test_custom_timeframe_and_trade_delta(self):
+        builder = CandleBuilder(interval_sec=300)
+        builder.update(10, 3, 301_000, "buy")
+        builder.update(11, 1, 420_000, "sell")
+        self.assertEqual(builder.current["time"], 300)
+        self.assertEqual(builder.current["delta"], 2)
+        closed = builder.update(12, 2, 600_000, "buy")
+        self.assertEqual(closed["time"], 300)
+        self.assertEqual(builder.current["time"], 600)
+
 
 class MarketStateTests(unittest.TestCase):
     def test_out_of_order_tick_is_ignored_entirely(self):

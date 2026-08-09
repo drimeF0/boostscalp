@@ -13,6 +13,7 @@ class FakeExchange:
         return 180_000
 
     async def fetch_ohlcv(self, symbol, timeframe, limit, params=None):
+        self.history_timeframe = timeframe
         self.history_limit = limit
         self.history_params = params
         return [
@@ -63,6 +64,7 @@ class LiveFeedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0]["type"], "warmup")
         self.assertEqual(len(events[0]["candles"]), 1)
         self.assertEqual(exchange.history_limit, 501)
+        self.assertEqual(exchange.history_timeframe, "1m")
         self.assertEqual(exchange.history_params, {"paginate": True})
         self.assertEqual([e["price"] for e in events if e["type"] == "tick"], [12.5])
         self.assertGreater(exchange.book_calls, 0)
@@ -87,6 +89,10 @@ class LiveNormalizationTests(unittest.TestCase):
         self.assertEqual(LiveFeed("binance", "BTC/USDT", 99_999).history_limit, 3000)
         self.assertEqual(LiveFeed("binance", "BTC/USDT", 0).history_limit, 0)
         self.assertEqual(LiveFeed("binance", "BTC/USDT", "bad").history_limit, 500)
+
+    def test_timeframe_is_validated(self):
+        self.assertEqual(LiveFeed("binance", "BTC/USDT", timeframe="15m").timeframe, "15m")
+        self.assertEqual(LiveFeed("binance", "BTC/USDT", timeframe="2m").timeframe, "1m")
 
     def test_book_is_sorted_filtered_and_limited(self):
         rows = [[2, 1], [3, 2], [0, 9], [1, -1], [4, float("nan")]]

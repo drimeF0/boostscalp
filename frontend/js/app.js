@@ -5,6 +5,7 @@ const App = {
   ws: null,
   mode: null,               // "live" | "backtest"
   symbol: "BTC/USDT",
+  timeframe: "1m",
   lastPrice: 0,
   tickSize: 0.01,
   aggregation: 1,
@@ -52,7 +53,9 @@ function routeMessage(m) {
     case "mode":
       App.mode = m.mode;
       App.symbol = m.symbol || App.symbol;
+      App.timeframe = m.timeframe || App.timeframe;
       $("chart-symbol").textContent = App.symbol;
+      $("chart-timeframe").textContent = App.timeframe;
       document.querySelector(".panel-meta").textContent = m.mode === "backtest" ? "Replay" : "Live chart";
       break;
     case "history":      Chart.setHistory(m.candles); break;
@@ -74,6 +77,7 @@ function routeMessage(m) {
     case "notification": toast(m.level, m.text); break;
     case "bt_status":    App.bt = m; renderBtStatus(); break;
     case "deriv":        renderDeriv(m); break;
+    case "trade_detail": TradeDetail.render(m.trade); break;
   }
 }
 
@@ -85,6 +89,7 @@ function renderDeriv(m) {
   const chg = (m.oiChg1h || 0) * 100;
   o.textContent = (chg >= 0 ? "+" : "") + chg.toFixed(2) + "%";
   o.className = chg >= 0 ? "pos" : "neg";
+  Chart.updateOi(m);
 }
 
 /* ---------------- обработчики ---------------- */
@@ -92,6 +97,7 @@ function renderDeriv(m) {
 function onState(m) {
   App.mode = m.mode;
   App.symbol = m.symbol;
+  App.timeframe = m.timeframe || App.timeframe;
   App.account = m.account;
   App.position = m.position;
   App.closePending = false;
@@ -99,6 +105,7 @@ function onState(m) {
   App.tradesCount = m.tradesCount;
   App.bt = m.bt;
   $("chart-symbol").textContent = App.symbol;
+  $("chart-timeframe").textContent = App.timeframe;
   renderAccount(); renderPosition(); Tabs.renderOrders(); Tabs.updateCounts();
   renderBtStatus();
   Chart.updateLines();
@@ -278,6 +285,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (history) {
       $("live-history-enabled").checked = history.enabled !== false;
       $("live-history-limit").value = Math.max(50, Math.min(3000, Number(history.limit) || 500));
+      $("live-timeframe").value = history.timeframe || "1m";
     }
   } catch (e) {}
 
@@ -286,6 +294,7 @@ document.addEventListener("DOMContentLoaded", () => {
   Tabs.init();
   Hotkeys.init();
   Layout.init();
+  TradeDetail.init();
   initToolbar();
   wsConnect();
 });
@@ -298,12 +307,15 @@ function initToolbar() {
     const historyEnabled = $("live-history-enabled").checked;
     const historyLimit = Math.max(50, Math.min(3000, parseInt($("live-history-limit").value, 10) || 500));
     $("live-history-limit").value = historyLimit;
-    localStorage.setItem("tt_live_history", JSON.stringify({ enabled: historyEnabled, limit: historyLimit }));
+    localStorage.setItem("tt_live_history", JSON.stringify({
+      enabled: historyEnabled, limit: historyLimit, timeframe: $("live-timeframe").value,
+    }));
     send({
       type: "start_live",
       exchange: $("live-exchange").value,
       symbol: normSymbol($("live-symbol").value),
       historyLimit: historyEnabled ? historyLimit : 0,
+      timeframe: $("live-timeframe").value,
     });
   };
   $("live-history-enabled").onchange = () => {

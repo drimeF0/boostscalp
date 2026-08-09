@@ -9,7 +9,7 @@ from typing import Callable, Deque, Dict, List, Optional
 MAX_CANDLES = 3000
 
 
-def _new_candle(ts_min: int, price: float, qty: float) -> dict:
+def _new_candle(ts_min: int, price: float, qty: float, side: str | None = None) -> dict:
     return {
         "time": ts_min,  # unix seconds, начало минуты
         "open": price,
@@ -17,35 +17,40 @@ def _new_candle(ts_min: int, price: float, qty: float) -> dict:
         "low": price,
         "close": price,
         "volume": qty,
+        "delta": qty if side == "buy" else -qty if side == "sell" else 0.0,
     }
 
 
 class CandleBuilder:
-    """Собирает 1-минутные свечи из тиков."""
+    """Собирает свечи выбранного интервала из тиков."""
 
-    def __init__(self, on_candle_close: Optional[Callable[[dict], None]] = None):
+    def __init__(self, on_candle_close: Optional[Callable[[dict], None]] = None,
+                 interval_sec: int = 60):
         self.current: Optional[dict] = None
         self.on_candle_close = on_candle_close
+        self.interval_sec = max(60, int(interval_sec))
 
-    def update(self, price: float, qty: float, ts_ms: int) -> Optional[dict]:
+    def update(self, price: float, qty: float, ts_ms: int,
+               side: str | None = None) -> Optional[dict]:
         """Возвращает закрытую свечу (если минута сменилась)."""
         if (not math.isfinite(price) or price <= 0 or not math.isfinite(qty)
                 or qty < 0 or not isinstance(ts_ms, (int, float)) or ts_ms <= 0):
             return None
-        ts_min = int(ts_ms // 60000) * 60
+        ts_min = int(ts_ms // (self.interval_sec * 1000)) * self.interval_sec
         closed = None
         if self.current is None or ts_min > self.current["time"]:
             if self.current is not None:
                 closed = self.current
                 if self.on_candle_close:
                     self.on_candle_close(closed)
-            self.current = _new_candle(ts_min, price, qty)
+            self.current = _new_candle(ts_min, price, qty, side)
         elif ts_min == self.current["time"]:
             c = self.current
             c["high"] = max(c["high"], price)
             c["low"] = min(c["low"], price)
             c["close"] = price
             c["volume"] += qty
+            c["delta"] += qty if side == "buy" else -qty if side == "sell" else 0.0
         # Запоздалые сделки из уже закрытой минуты игнорируем. Иначе они
         # повреждают OHLC текущей свечи.
         return closed
@@ -105,13 +110,16 @@ class DerivativesState:
 class MarketState:
     """Хранит последние цены, свечи, стакан; считает индикаторы."""
 
-    def __init__(self, symbol: str = "", tick_size: float = 0.01):
+    def __init__(self, symbol: str = "", tick_size: float = 0.01,
+                 interval_sec: int = 60):
         self.symbol = symbol
         self.tick_size = tick_size
         self.last_price: float = 0.0
         self.last_ts: int = 0  # ms
         self.candles: Deque[dict] = deque(maxlen=MAX_CANDLES)
-        self.builder = CandleBuilder(on_candle_close=self._on_candle)
+        self.interval_sec = interval_sec
+        self.builder = CandleBuilder(on_candle_close=self._on_candle,
+                                     interval_sec=self.interval_sec)
         self.bids: List[List[float]] = []
         self.asks: List[List[float]] = []
         self.deriv = DerivativesState()
@@ -125,14 +133,18 @@ class MarketState:
     def _on_candle(self, candle: dict) -> None:
         self.candles.append(candle)
 
-    def reset(self, symbol: str, tick_size: Optional[float] = None):
+    def reset(self, symbol: str, tick_size: Optional[float] = None,
+              interval_sec: Optional[int] = None):
         self.symbol = symbol
         if tick_size:
             self.tick_size = tick_size
         self.last_price = 0.0
         self.last_ts = 0
         self.candles.clear()
-        self.builder = CandleBuilder(on_candle_close=self._on_candle)
+        if interval_sec is not None:
+            self.interval_sec = max(60, int(interval_sec))
+        self.builder = CandleBuilder(on_candle_close=self._on_candle,
+                                     interval_sec=self.interval_sec)
         self.bids = []
         self.asks = []
         self.deriv.reset()
@@ -140,7 +152,8 @@ class MarketState:
         self._pv = 0.0
         self._vv = 0.0
 
-    def on_tick(self, price: float, qty: float, ts_ms: int) -> Optional[dict]:
+    def on_tick(self, price: float, qty: float, ts_ms: int,
+                side: str | None = None) -> Optional[dict]:
         if (not math.isfinite(price) or price <= 0 or not math.isfinite(qty)
                 or qty < 0 or not isinstance(ts_ms, (int, float)) or ts_ms <= 0):
             return None
@@ -157,7 +170,7 @@ class MarketState:
         if qty > 0:
             self._pv += price * qty
             self._vv += qty
-        return self.builder.update(price, qty, ts_ms)
+        return self.builder.update(price, qty, ts_ms, side)
 
     def on_candle_closed_external(self, candle: dict):
         """Для бэктеста: свеча пришла из файла (не из тиков)."""

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import logging
 import math
 from typing import Optional
@@ -11,9 +12,10 @@ from .broker import PaperBroker
 from .config import (DEFAULT_MAKER_FEE, DEFAULT_START_BALANCE,
                      DEFAULT_TAKER_FEE, DEFAULT_TICK_SIZE, DEFAULT_TICK_SIZES,
                      DEFAULT_THRESHOLD)
-from .db import count_trades, fetch_trades, insert_trade
+from .db import (count_trades, fetch_trade, fetch_trades, insert_trade,
+                 update_trade_context, update_trade_tags)
 from .feeds.backtest import BacktestFeed
-from .feeds.live import LiveFeed
+from .feeds.live import LiveFeed, TIMEFRAME_SECONDS
 from .market import MAX_CANDLES, MarketState
 from .ml.features import compute_features
 from .ml.meta import MetaModel
@@ -34,6 +36,7 @@ class Session:
         self.meta_threshold = DEFAULT_THRESHOLD
         self.mode = None                   # "live" | "backtest"
         self.symbol = "BTC/USDT"
+        self.timeframe = "1m"
         self.feed = None
         self.feed_task: Optional[asyncio.Task] = None
         self.bt_status = {"running": False, "paused": False, "pct": 0.0,
@@ -51,8 +54,11 @@ class Session:
 
     def _on_broker_event(self, kind: str, payload: dict):
         if kind == "trade_closed":
-            insert_trade(payload, mode=self.mode or "")
-            self.send({"type": "trade_closed", "trade": _public_trade(payload)})
+            saved = dict(payload)
+            saved["context"] = self._context_candles(payload["entryTs"], payload["exitTs"], 240, 0)
+            trade_id = insert_trade(saved, mode=self.mode or "")
+            saved["id"] = trade_id
+            self.send({"type": "trade_closed", "trade": _public_trade(saved)})
             self.send({"type": "trades_count", "count": count_trades()})
         else:
             self.send({"type": kind, "data": payload})
@@ -65,7 +71,8 @@ class Session:
             if t == "start_live":
                 await self.start_live(msg.get("exchange", "binance"),
                                       msg.get("symbol", "BTC/USDT"),
-                                      msg.get("historyLimit", 500))
+                                      msg.get("historyLimit", 500),
+                                      msg.get("timeframe", "1m"))
             elif t == "start_backtest":
                 await self.start_backtest(msg)
             elif t == "bt_control":
@@ -105,6 +112,10 @@ class Session:
             elif t == "get_trades":
                 self.send({"type": "trades_list",
                            "trades": [_db_trade_public(x) for x in fetch_trades(300)]})
+            elif t == "get_trade_detail":
+                self.send_trade_detail(msg)
+            elif t == "update_trade_tags":
+                self.update_trade_tags(msg)
         except Exception as e:
             log.exception("handle error")
             self.notify("error", str(e))
@@ -129,7 +140,7 @@ class Session:
         self.feed = None
         self.feed_task = None
 
-    async def _switch(self, symbol: str):
+    async def _switch(self, symbol: str, interval_sec: int = 60):
         """Остановить текущий фид, закрыть позицию/ордера, сбросить состояние."""
         await self._stop_feed()
         if self.broker.position.qty != 0:
@@ -137,22 +148,26 @@ class Session:
         self.broker.cancel_all()
         self.symbol = symbol
         tick = DEFAULT_TICK_SIZES.get(symbol, DEFAULT_TICK_SIZE)
-        self.state.reset(symbol, tick)
+        self.state.reset(symbol, tick, interval_sec=interval_sec)
         self.bt_status.update({"running": False, "paused": False, "pct": 0.0})
 
-    async def start_live(self, exchange: str, symbol: str, history_limit: int = 500):
-        await self._switch(symbol)
+    async def start_live(self, exchange: str, symbol: str, history_limit: int = 500,
+                         timeframe: str = "1m"):
+        timeframe = timeframe if timeframe in TIMEFRAME_SECONDS else "1m"
+        await self._switch(symbol, TIMEFRAME_SECONDS[timeframe])
         self.mode = "live"
-        self.feed = LiveFeed(exchange, symbol, history_limit=history_limit)
+        self.timeframe = timeframe
+        self.feed = LiveFeed(exchange, symbol, history_limit=history_limit, timeframe=timeframe)
         self.feed_task = asyncio.create_task(self._feed_loop())
         self.send({"type": "mode", "mode": "live", "exchange": exchange, "symbol": symbol,
-                   "historyLimit": self.feed.history_limit})
+                   "historyLimit": self.feed.history_limit, "timeframe": timeframe})
         self.notify("info", f"Live: {exchange} {symbol} — подключение...")
 
     async def start_backtest(self, msg: dict):
         symbol = msg.get("symbol", "BTC/USDT")
-        await self._switch(symbol)
+        await self._switch(symbol, 60)
         self.mode = "backtest"
+        self.timeframe = "1m"
         try:
             start = dt.date.fromisoformat(msg.get("start"))
             end = dt.date.fromisoformat(msg.get("end"))
@@ -169,7 +184,7 @@ class Session:
         self.bt_status.update({"running": True, "paused": False, "pct": 0.0, "speed": speed})
         self.feed_task = asyncio.create_task(self._feed_loop())
         self.send({"type": "mode", "mode": "backtest", "symbol": symbol,
-                   "start": str(start), "end": str(end)})
+                   "start": str(start), "end": str(end), "timeframe": "1m"})
         self.send_bt_status()
 
     async def bt_control(self, msg: dict):
@@ -248,7 +263,7 @@ class Session:
                 or (self.state.last_ts and ts < self.state.last_ts)):
             log.warning("ignored invalid/out-of-order tick: %r", ev)
             return
-        self.state.on_tick(price, qty, ts)
+        self.state.on_tick(price, qty, ts, ev.get("side"))
         self.broker.on_tick(ts, price)
         cur = self.state.builder.current
         self.send({"type": "tick", "ts": ts, "price": price,
@@ -342,6 +357,54 @@ class Session:
             self.notify("info", "Счёт сброшен")
         self.send_state()
 
+    # ==================== журнал сделки ====================
+
+    def _context_candles(self, entry_ts: int, exit_ts: int,
+                         prefix_min: int, suffix_min: int) -> list[dict]:
+        start = entry_ts - prefix_min * 60_000
+        end = exit_ts + suffix_min * 60_000
+        candles = list(self.state.candles)
+        if self.state.builder.current is not None:
+            candles.append(dict(self.state.builder.current))
+        return [dict(c) for c in candles if start <= c["time"] * 1000 <= end]
+
+    def send_trade_detail(self, msg: dict):
+        trade_id = int(msg.get("tradeId", 0))
+        trade = fetch_trade(trade_id)
+        if trade is None:
+            self.notify("error", "Сделка не найдена")
+            return
+        prefix = max(0, min(int(msg.get("prefixMinutes", 30)), 240))
+        suffix = max(0, min(int(msg.get("suffixMinutes", 15)), 240))
+        context = trade.get("context") or []
+        if self.state.symbol == trade["symbol"]:
+            live_context = self._context_candles(
+                trade["entry_ts"], trade["exit_ts"], prefix, suffix,
+            )
+            merged = {c["time"]: c for c in [*context, *live_context]}
+            context = [merged[key] for key in sorted(merged)]
+            if live_context:
+                update_trade_context(trade_id, context)
+        start = trade["entry_ts"] - prefix * 60_000
+        end = trade["exit_ts"] + suffix * 60_000
+        context = [c for c in context if start <= c["time"] * 1000 <= end]
+        self.send({"type": "trade_detail", "trade": _db_trade_detail(trade, context)})
+
+    def update_trade_tags(self, msg: dict):
+        trade_id = int(msg.get("tradeId", 0))
+        entry = _clean_tags(msg.get("entryTags"))
+        exit_ = _clean_tags(msg.get("exitTags"))
+        notes = str(msg.get("notes") or "")[:2000]
+        if not update_trade_tags(trade_id, entry, exit_, notes):
+            self.notify("error", "Сделка не найдена")
+            return
+        self.notify("ok", "Теги сделки сохранены")
+        self.send_trade_detail({"tradeId": trade_id,
+                                "prefixMinutes": msg.get("prefixMinutes", 30),
+                                "suffixMinutes": msg.get("suffixMinutes", 15)})
+        self.send({"type": "trades_list",
+                   "trades": [_db_trade_public(x) for x in fetch_trades(300)]})
+
     # ==================== снимки ====================
 
     def notify(self, level: str, text: str):
@@ -350,7 +413,8 @@ class Session:
     def send_deriv(self):
         d = self.state.deriv
         self.send({"type": "deriv", "funding": d.funding_rate,
-                   "oi": d.oi_now(), "oiChg1h": d.oi_chg(60, self.state.last_ts)})
+                   "oi": d.oi_now(), "oiChg1h": d.oi_chg(60, self.state.last_ts),
+                   "ts": self.state.last_ts})
 
     def send_bt_status(self):
         self.send({"type": "bt_status", **self.bt_status})
@@ -360,6 +424,7 @@ class Session:
             "type": "state",
             "mode": self.mode,
             "symbol": self.symbol,
+            "timeframe": self.timeframe,
             "account": self.broker.account_dict(),
             "position": self.broker.position.to_dict(self.state.last_price),
             "orders": self.broker.orders_list(),
@@ -389,4 +454,39 @@ def _db_trade_public(t: dict) -> dict:
         "entryPrice": t["entry_price"], "exitPrice": t["exit_price"],
         "entryTs": t["entry_ts"], "exitTs": t["exit_ts"], "pnl": t["pnl"],
         "fee": t["fee"], "label": t["label"], "mode": t.get("mode", ""),
+        "entryTags": _json_value(t.get("entry_tags"), []),
+        "exitTags": _json_value(t.get("exit_tags"), []),
     }
+
+
+def _db_trade_detail(t: dict, context: list[dict]) -> dict:
+    result = _db_trade_public(t)
+    result.update({
+        "features": _json_value(t.get("features"), {}),
+        "candles": context,
+        "notes": t.get("notes") or "",
+    })
+    return result
+
+
+def _json_value(value, fallback):
+    if isinstance(value, type(fallback)):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, type(fallback)) else fallback
+        except Exception:
+            return fallback
+    return fallback
+
+
+def _clean_tags(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value:
+        tag = str(item).strip()[:40]
+        if tag and tag not in result:
+            result.append(tag)
+    return result[:20]
