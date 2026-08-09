@@ -25,29 +25,71 @@ const App = {
 
 const $ = (id) => document.getElementById(id);
 
-const Tape = { maxRows: 120 };
+const Tape = { maxRows: 120, minNotional: 100, current: null };
 
 Tape.clear = function () {
   $("tape-list").innerHTML = `<div class="tape-empty">Ожидание сделок…</div>`;
+  Tape.current = null;
+};
+
+Tape.compactNotional = function (notional) {
+  return notional >= 1e6 ? `${(notional / 1e6).toFixed(1)}M`
+    : notional >= 1000 ? `${(notional / 1000).toFixed(notional >= 10000 ? 0 : 1)}K`
+    : notional.toFixed(notional >= 100 ? 0 : 1);
+};
+
+Tape.renderEntry = function (entry) {
+  const decimals = Math.min(8, Math.max(0,
+    -Math.floor(Math.log10(App.tickSize || 0.01) + 1e-9)));
+  entry.row.innerHTML = `<span class="tape-price">${fmt(entry.price, decimals)}</span>` +
+    `<span class="tape-meta"><i class="tape-count">${entry.count > 1 ? `×${entry.count}` : ""}</i>` +
+    `<b class="tape-qty">${Tape.compactNotional(entry.notional)}</b></span>`;
+  entry.row.title = `${entry.side.toUpperCase()} · ${entry.count} принт(ов) · ` +
+    `$${entry.notional.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+};
+
+Tape.loadSettings = function () {
+  try {
+    const saved = JSON.parse(localStorage.getItem("tt_tape_settings") || "null");
+    if (saved && Number.isFinite(Number(saved.minNotional))) {
+      Tape.minNotional = Math.max(0, Number(saved.minNotional));
+    }
+  } catch (e) {}
+  $("tape-min-notional").value = Tape.minNotional;
+};
+
+Tape.saveSettings = function () {
+  const value = Number($("tape-min-notional").value);
+  Tape.minNotional = Number.isFinite(value) ? Math.max(0, value) : 0;
+  $("tape-min-notional").value = Tape.minNotional;
+  localStorage.setItem("tt_tape_settings", JSON.stringify({ minNotional: Tape.minNotional }));
+  Tape.clear();
+  toast("ok", `Лента: минимальный принт $${Tape.minNotional.toLocaleString("en-US")}`);
 };
 
 Tape.push = function (tick) {
   if (!tick || !Number.isFinite(tick.price) || tick.price <= 0 ||
       !Number.isFinite(tick.qty) || tick.qty <= 0) return;
+  const notional = tick.qty * tick.price;
+  if (notional < Tape.minNotional) return;
   const list = $("tape-list");
   const empty = list.querySelector(".tape-empty");
   if (empty) empty.remove();
-  const row = document.createElement("div");
   const side = tick.side === "buy" || tick.side === "sell" ? tick.side : "neutral";
+  if (side !== "neutral" && Tape.current && Tape.current.side === side) {
+    Tape.current.price = tick.price;
+    Tape.current.qty += tick.qty;
+    Tape.current.notional += notional;
+    Tape.current.count += 1;
+    Tape.renderEntry(Tape.current);
+    return;
+  }
+  const row = document.createElement("div");
   row.className = `tape-print ${side}`;
-  const notional = tick.qty * tick.price;
-  const compact = notional >= 1e6 ? `${(notional / 1e6).toFixed(1)}M`
-    : notional >= 1000 ? `${(notional / 1000).toFixed(notional >= 10000 ? 0 : 1)}K`
-    : notional.toFixed(notional >= 100 ? 0 : 1);
-  const decimals = Math.min(8, Math.max(0,
-    -Math.floor(Math.log10(App.tickSize || 0.01) + 1e-9)));
-  row.innerHTML = `<span>${fmt(tick.price, decimals)}</span><span class="tape-qty">${compact}</span>`;
+  const entry = { row, side, price: tick.price, qty: tick.qty, notional, count: 1 };
+  Tape.renderEntry(entry);
   list.prepend(row);
+  Tape.current = side === "neutral" ? null : entry;
   while (list.children.length > Tape.maxRows) list.lastElementChild.remove();
 };
 
@@ -355,6 +397,7 @@ document.addEventListener("DOMContentLoaded", () => {
   } catch (e) {}
   App.currentSize = App.sizes[0];
   renderQuickSizes();
+  Tape.loadSettings();
 
   try {
     const history = JSON.parse(localStorage.getItem("tt_live_history") || "null");
@@ -407,6 +450,7 @@ function initToolbar() {
     $("live-history-limit").disabled = !$("live-history-enabled").checked;
   };
   $("live-history-limit").disabled = !$("live-history-enabled").checked;
+  $("save-tape-settings").onclick = Tape.saveSettings;
   // бэктест
   $("bt-start-btn").onclick = () => {
     send({

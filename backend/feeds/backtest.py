@@ -185,8 +185,10 @@ def load_aggtrades(files: List[str], start_ms: int, end_ms: int) -> List[dict]:
     frames = []
     for path in files:
         df = pd.read_csv(
-            path, header=None, usecols=[1, 2, 5],
-            names=["price", "qty", "ts"], dtype=float, skiprows=1, on_bad_lines="skip",
+            path, header=None, usecols=[1, 2, 5, 6],
+            names=["price", "qty", "ts", "buyer_maker"],
+            dtype={"price": float, "qty": float, "ts": float},
+            skiprows=1, on_bad_lines="skip",
         )
         if df.empty:
             continue
@@ -198,8 +200,13 @@ def load_aggtrades(files: List[str], start_ms: int, end_ms: int) -> List[dict]:
     if not frames:
         return []
     df = pd.concat(frames).sort_values("ts")
-    return [{"ts": int(t), "price": p, "qty": q}
-            for t, p, q in zip(df["ts"].values, df["price"].values, df["qty"].values)]
+    def taker_side(buyer_maker) -> str:
+        # buyer-maker=True означает, что агрессором был продавец.
+        return "sell" if str(buyer_maker).strip().lower() in ("true", "1", "1.0") else "buy"
+
+    return [{"ts": int(t), "price": p, "qty": q, "side": taker_side(maker)}
+            for t, p, q, maker in zip(df["ts"].values, df["price"].values,
+                                      df["qty"].values, df["buyer_maker"].values)]
 
 
 def _parse_flex_ts(v: str) -> int:
@@ -362,7 +369,10 @@ class BacktestFeed:
                     return
                 await self.paused.wait()
                 ts = ts0 + int(j * 60000 / len(ticks))
-                yield {"type": "tick", "ts": ts, "price": px, "qty": vol_per}
+                previous = ticks[j - 1] if j else px
+                side = "buy" if px > previous else "sell" if px < previous else None
+                yield {"type": "tick", "ts": ts, "price": px, "qty": vol_per,
+                       "side": side}
                 bids, asks = gen_book(px, self.tick_size, rng=self._rng)
                 yield {"type": "book", "bids": bids, "asks": asks}
                 await asyncio.sleep(tick_delay)
@@ -388,7 +398,8 @@ class BacktestFeed:
                 await asyncio.sleep(min(dt, 1.0))
             for ev in pump.due(t["ts"]):
                 yield ev
-            yield {"type": "tick", "ts": t["ts"], "price": t["price"], "qty": t["qty"]}
+            yield {"type": "tick", "ts": t["ts"], "price": t["price"],
+                   "qty": t["qty"], "side": t["side"]}
             if i % 10 == 0:
                 bids, asks = gen_book(t["price"], self.tick_size, rng=self._rng)
                 yield {"type": "book", "bids": bids, "asks": asks}

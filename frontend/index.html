@@ -222,6 +222,12 @@
           Загружать историю
           <input id="live-history-limit" type="number" value="500" min="80" max="3000" step="20">
         </label>
+        <h4>Лента принтов</h4>
+        <label>Минимальный объём, USDT
+          <input id="tape-min-notional" type="number" value="100" min="0" step="100" class="w90">
+        </label>
+        <p class="dim tape-settings-help">Мелкие сделки ниже порога скрываются. Последовательные BUY/SELL объединяются автоматически.</p>
+        <button id="save-tape-settings" class="btn">Применить к ленте</button>
       </div>
       <div>
         <h4>Мета-модель</h4>

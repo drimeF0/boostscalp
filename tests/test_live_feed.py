@@ -1,6 +1,9 @@
 import asyncio
+import os
+import tempfile
 import unittest
 
+from backend.feeds.backtest import load_aggtrades
 from backend.feeds.live import LiveFeed, _clean_book_side, _clean_ohlcv
 
 
@@ -104,6 +107,18 @@ class LiveFeedTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LiveNormalizationTests(unittest.TestCase):
+    def test_aggtrades_preserve_taker_side_for_print_tape(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "trades.csv")
+            with open(path, "w", encoding="utf-8") as file:
+                file.write("id,price,qty,first,last,ts,buyer_maker\n")
+                file.write("1,100,2,1,1,1000,True\n")
+                file.write("2,101,3,2,2,2000,False\n")
+
+            trades = load_aggtrades([path], 0, 3000)
+
+        self.assertEqual([trade["side"] for trade in trades], ["sell", "buy"])
+
     def test_history_limit_is_clamped_and_can_be_disabled(self):
         self.assertEqual(LiveFeed("binance", "BTC/USDT", 99_999).history_limit, 3000)
         self.assertEqual(LiveFeed("binance", "BTC/USDT", 0).history_limit, 0)
